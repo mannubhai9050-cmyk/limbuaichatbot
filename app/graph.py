@@ -37,6 +37,7 @@ async def book_demo_api(name: str, phone: str, date: str, time: str) -> dict:
                     "selectedDate": date
                 }
             )
+            
             return {"success": res.status_code in [200, 201], "data": res.json()}
     except Exception as e:
         print(f"Booking API error: {e}")
