@@ -1,0 +1,206 @@
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from dotenv import load_dotenv
+import uuid
+
+load_dotenv()
+
+from app.graph import chat
+from app.qdrant_db import insert_data
+from app.services.redis_service import get_history, clear_history, get_all_users
+
+app = FastAPI(title="Limbu.ai Chatbot API", version="4.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class ChatRequest(BaseModel):
+    message: str
+    user_id: str = None
+
+
+@app.on_event("startup")
+def startup():
+    print("🚀 Limbu.ai Chatbot v4 starting...")
+    insert_data()
+    print("✅ Ready!")
+
+
+@app.get("/")
+def root():
+    return {"message": "Limbu.ai Chatbot API v4 🚀", "admin": "/admin"}
+
+
+@app.post("/chat")
+def chat_endpoint(req: ChatRequest):
+    user_id = req.user_id or str(uuid.uuid4())
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    response = chat(user_id, req.message)
+    return {"response": response, "user_id": user_id, "status": "ok"}
+
+
+@app.post("/webhook/chat")
+async def webhook_chat(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    message = body.get("message", "").strip()
+    user_id = body.get("user_id") or request.headers.get("X-User-ID") or str(uuid.uuid4())
+    if not message:
+        raise HTTPException(status_code=400, detail="message required")
+    response = chat(user_id, message)
+    return {"response": response, "user_id": user_id, "status": "ok"}
+
+
+# ── Admin APIs ────────────────────────────────────────────────────
+@app.get("/api/admin/users")
+def admin_users():
+    users = get_all_users()
+    return {"total": len(users), "users": users}
+
+
+@app.get("/api/admin/chat/{user_id}")
+def admin_chat(user_id: str):
+    history = get_history(user_id)
+    return {"user_id": user_id, "messages": history, "total": len(history)}
+
+
+@app.delete("/api/admin/chat/{user_id}")
+def admin_clear(user_id: str):
+    clear_history(user_id)
+    return {"message": f"Cleared for {user_id}"}
+
+
+# ── Admin Dashboard ───────────────────────────────────────────────
+@app.get("/admin", response_class=HTMLResponse)
+def admin_dashboard():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Limbu.ai Chat Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;height:100vh;display:flex;flex-direction:column}
+.header{background:linear-gradient(135deg,#16a34a,#059669);padding:14px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{color:white;font-size:18px;font-weight:700}
+.live{display:flex;align-items:center;gap:6px;color:#bbf7d0;font-size:13px}
+.dot{width:8px;height:8px;background:#4ade80;border-radius:50%;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.body{display:flex;flex:1;overflow:hidden}
+.sidebar{width:340px;background:#1e293b;border-right:1px solid #334155;display:flex;flex-direction:column}
+.sidebar-top{padding:12px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between}
+.sidebar-top h2{font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:1px}
+.badge{background:#16a34a;color:white;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600}
+.users{flex:1;overflow-y:auto}
+.user{padding:12px 16px;border-bottom:1px solid #1a2535;cursor:pointer;transition:all .15s}
+.user:hover{background:#273344}
+.user.active{background:#1a2e22;border-left:3px solid #16a34a}
+.uid{font-size:12px;color:#94a3b8;margin-bottom:3px;word-break:break-all}
+.umeta{font-size:11px;color:#475569;margin-bottom:3px}
+.ulast{font-size:12px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ucnt{float:right;background:#0f3a1e;color:#4ade80;padding:1px 6px;border-radius:8px;font-size:11px}
+.chat{flex:1;display:flex;flex-direction:column}
+.chat-top{padding:12px 20px;background:#1e293b;border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between}
+.chat-top h3{font-size:14px;color:#e2e8f0;font-weight:600}
+.chat-top span{font-size:12px;color:#64748b}
+.btns{display:flex;gap:8px}
+.btn{padding:5px 12px;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600}
+.btn-r{background:#1e3a2f;color:#4ade80}
+.btn-c{background:#3b1e1e;color:#f87171}
+.messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:72%;padding:10px 14px;border-radius:16px;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.msg.user{background:#1d4ed8;color:white;align-self:flex-end;border-bottom-right-radius:4px}
+.msg.assistant{background:#1e293b;color:#e2e8f0;align-self:flex-start;border-bottom-left-radius:4px}
+.mtime{font-size:10px;opacity:.5;margin-top:4px}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#475569;gap:10px}
+.no-users{padding:20px;text-align:center;color:#475569;font-size:13px}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🤖 Limbu.ai Chat Admin</h1>
+  <div class="live"><div class="dot"></div>Live • Auto-refresh 10s</div>
+</div>
+<div class="body">
+  <div class="sidebar">
+    <div class="sidebar-top"><h2>Conversations</h2><span class="badge" id="cnt">0</span></div>
+    <div class="users" id="users"><div class="no-users">Loading...</div></div>
+  </div>
+  <div class="chat">
+    <div class="chat-top">
+      <div><h3 id="ctitle">Select a conversation</h3><span id="cmeta"></span></div>
+      <div class="btns">
+        <button class="btn btn-r" onclick="loadUsers()">↺ Refresh</button>
+        <button class="btn btn-c" id="cbtn" onclick="doClear()" style="display:none">🗑 Clear</button>
+      </div>
+    </div>
+    <div class="messages" id="msgs">
+      <div class="empty"><div style="font-size:40px">💬</div><p>Select a conversation to view</p></div>
+    </div>
+  </div>
+</div>
+<script>
+let sel=null;
+async function loadUsers(){
+  const d=await(await fetch('/api/admin/users')).json();
+  document.getElementById('cnt').textContent=d.total;
+  const el=document.getElementById('users');
+  if(!d.users.length){el.innerHTML='<div class="no-users">No conversations yet</div>';return;}
+  el.innerHTML=d.users.map(u=>`<div class="user ${u.user_id===sel?'active':''}" onclick="selUser('${u.user_id}')">
+    <div class="uid">${u.user_id.slice(0,30)}... <span class="ucnt">${u.message_count}</span></div>
+    <div class="umeta">${u.last_active}</div>
+    <div class="ulast">${u.last_message||'No messages'}</div>
+  </div>`).join('');
+}
+async function selUser(uid){
+  sel=uid;
+  document.getElementById('cbtn').style.display='inline-block';
+  document.getElementById('ctitle').textContent=uid.slice(0,40)+'...';
+  await loadChat(uid);loadUsers();
+}
+async function loadChat(uid){
+  const d=await(await fetch(`/api/admin/chat/${uid}`)).json();
+  document.getElementById('cmeta').textContent=`${d.total} messages`;
+  const el=document.getElementById('msgs');
+  if(!d.messages.length){el.innerHTML='<div class="empty"><div style="font-size:40px">💬</div><p>No messages</p></div>';return;}
+  el.innerHTML=d.messages.map(m=>`<div class="msg ${m.role}">${m.content}<div class="mtime">${m.time||''}</div></div>`).join('');
+  el.scrollTop=el.scrollHeight;
+}
+async function doClear(){
+  if(!sel||!confirm('Clear this conversation?'))return;
+  await fetch(`/api/admin/chat/${sel}`,{method:'DELETE'});
+  loadChat(sel);
+}
+loadUsers();
+setInterval(()=>{loadUsers();if(sel)loadChat(sel);},10000);
+</script>
+</body>
+</html>"""
+
+
+@app.get("/history/{user_id}")
+def get_history_endpoint(user_id: str):
+    return {"user_id": user_id, "history": get_history(user_id)}
+
+
+@app.delete("/history/{user_id}")
+def delete_history(user_id: str):
+    clear_history(user_id)
+    return {"message": f"Cleared for {user_id}"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "version": "4.0.0"}

@@ -1,46 +1,27 @@
-import os
-import json
-import redis
+"""
+Backward compatibility wrapper.
+All memory operations now handled by app.services.redis_service
+"""
+from app.services.redis_service import (
+    save_message as save_chat,
+    get_history as get_chat,
+    save_session,
+    get_session,
+    clear_session,
+    clear_history as clear_chat,
+    get_all_users
+)
 
-r = redis.from_url(os.getenv("REDIS_URL"))
-MAX_HISTORY = 10
-
-
-def save_chat(user_id: str, role: str, content: str):
-    key = f"chat:{user_id}"
-    history = get_chat(user_id)
-    history.append({"role": role, "content": content})
-    if len(history) > MAX_HISTORY:
-        history = history[-MAX_HISTORY:]
-    r.set(key, json.dumps(history), ex=86400)
-
-
-def get_chat(user_id: str) -> list:
-    try:
-        data = r.get(f"chat:{user_id}")
-        return json.loads(data) if data else []
-    except Exception:
-        return []
-
-
-def clear_chat(user_id: str):
-    r.delete(f"chat:{user_id}")
-    r.delete(f"booking:{user_id}")
-
-
-# ── Booking State ─────────────────────────────────────────────────
+# Aliases for backward compatibility
 def get_booking_state(user_id: str) -> dict:
-    """Booking ke liye collected data"""
-    try:
-        data = r.get(f"booking:{user_id}")
-        return json.loads(data) if data else {}
-    except Exception:
-        return {}
-
+    return get_session(user_id).get("booking", {})
 
 def save_booking_state(user_id: str, state: dict):
-    r.set(f"booking:{user_id}", json.dumps(state), ex=3600)  # 1 hour
-
+    session = get_session(user_id)
+    session["booking"] = state
+    save_session(user_id, session)
 
 def clear_booking_state(user_id: str):
-    r.delete(f"booking:{user_id}")
+    session = get_session(user_id)
+    session.pop("booking", None)
+    save_session(user_id, session)

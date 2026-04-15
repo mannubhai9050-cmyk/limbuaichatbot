@@ -1,75 +1,254 @@
 def load_data():
     return [
-        # About
-        {"id": 1, "text": "Limbu.ai ek AI-powered local marketing platform hai jo Google Business Profile, Facebook, aur Instagram automate karta hai aur local SEO improve karta hai.", "type": "about"},
-        {"id": 2, "text": "Limbu.ai local businesses ki 'near me' Google ranking improve karta hai, social media automate karta hai, aur leads generate karta hai.", "type": "about"},
-
-        # Features
-        {"id": 3, "text": "AI Post Generation: AI automatically captions, hashtags, aur SEO-optimized content banata hai jo user review karke publish kar sakta hai.", "type": "feature"},
-        {"id": 4, "text": "Smart Scheduling: Posts automatically best time pe multiple platforms pe publish hoti hain.", "type": "feature"},
-        {"id": 5, "text": "Review Management: AI customer reviews ka reply suggest karta hai jo edit ya turant send kiya ja sakta hai.", "type": "feature"},
-        {"id": 6, "text": "Magic QR: Negative reviews filter karta hai aur private feedback collect karta hai taaki public rating improve ho.", "type": "feature"},
-        {"id": 7, "text": "Dashboard: Multiple business locations manage karo aur performance insights ek jagah dekho.", "type": "feature"},
-
-        # Pricing — Monthly Plans
-        {"id": 8, "text": "Basic Plan: Rs 2500 per month. Includes: 15 GMB posts, 5 citations, review reply system, Magic QR. Best for small businesses.", "type": "pricing"},
-        {"id": 9, "text": "Professional Plan: Rs 5500 per month. Includes: 30 GMB posts, 12 citations, review management, insights dashboard. Best for growing businesses.", "type": "pricing"},
-        {"id": 10, "text": "Premium Plan: Rs 7500 per month. Includes: 45 GMB posts, 15 citations, advanced automation. Best for established businesses.", "type": "pricing"},
-
-        # Pricing — One-time
-        {"id": 11, "text": "GMB Assistance Plan: Rs 2500 one-time. Google Business Profile management support.", "type": "pricing"},
-        {"id": 12, "text": "GMB Creation Plan: Rs 3000 one-time. Naya Google Business Profile banana.", "type": "pricing"},
-
-        # Pricing — Website
-        {"id": 13, "text": "Starter Website: Rs 9999 one-time. 5-page website.", "type": "pricing"},
-        {"id": 14, "text": "Business Website: Rs 25000 one-time. 15-page professional website.", "type": "pricing"},
-        {"id": 15, "text": "Enterprise Website: Rs 48000 one-time. 35 pages with eCommerce functionality.", "type": "pricing"},
-
-        # Pricing — SEO
-        {"id": 16, "text": "Basic SEO Plan: Rs 5999 per month. SEO optimization services.", "type": "pricing"},
-        {"id": 17, "text": "Standard SEO Plan: Rs 9999 per month. Advanced SEO services.", "type": "pricing"},
-        {"id": 18, "text": "Advanced SEO Plan: Rs 15999 per month. High-level SEO optimization.", "type": "pricing"},
-
-        # Pricing — Ads
-        {"id": 19, "text": "Google Ads Setup: Rs 2500 one-time. Meta Ads Setup: Rs 3500 one-time.", "type": "pricing"},
-
-        # How-to
-        {"id": 20, "text": "Login kaise karein: Mobile number daalo, OTP receive karo, verify karo, dashboard access milega.", "type": "how_to"},
-        {"id": 21, "text": "Post kaise banayein: Post Management mein jaao, business select karo, AI se post generate karo, publish ya schedule karo.", "type": "how_to"},
-        {"id": 22, "text": "Account connect kaise karein: Settings mein jaao, Connect Accounts click karo, Google ya Facebook se login karo.", "type": "how_to"},
-
-        # Issues
-        {"id": 23, "text": "OTP nahi aaya: Network check karo, number verify karo, Resend OTP use karo.", "type": "issue"},
-
-        # FAQ
-        {"id": 24, "text": "Limbu.ai secure OAuth use karta hai aur user passwords store nahi karta.", "type": "faq"},
-        {"id": 25, "text": "Ek dashboard se multiple business locations manage ho sakti hain.", "type": "faq"},
-        {"id": 26, "text": "AI content generate karta hai jo user edit aur approve kar sakta hai.", "type": "faq"},
-        {"id": 27, "text": "Results 2 se 4 weeks mein dikhayi dene lagte hain.", "type": "faq"},
-        {"id": 28, "text": "Platform beginner-friendly hai, koi technical skill nahi chahiye.", "type": "faq"},
-        {"id": 29, "text": "Posts advance mein schedule ki ja sakti hain.", "type": "faq"},
-        {"id": 30, "text": "Limbu.ai Facebook aur Instagram dono support karta hai.", "type": "faq"},
-        {"id": 31, "text": "User AI-generated content publish se pehle edit kar sakta hai.", "type": "faq"},
-        {"id": 32, "text": "Regular activity se Google rankings improve hoti hain.", "type": "faq"},
-        {"id": 33, "text": "Limited free trial available hai.", "type": "faq"},
-        {"id": 34, "text": "Platform restaurants, salons, clinics, gyms, aur doosre local businesses ke liye suitable hai.", "type": "faq"},
-        {"id": 35, "text": "Performance analytics aur insights dashboard mein available hain.", "type": "faq"},
-        {"id": 36, "text": "Team collaboration supported hai.", "type": "faq"},
-        {"id": 37, "text": "Setup mein 15 se 30 minutes lagte hain. Onboarding tutorials available hain.", "type": "faq"},
-        {"id": 38, "text": "User kisi bhi time plan cancel kar sakta hai, koi long-term contract nahi.", "type": "faq"},
-        {"id": 39, "text": "Support chat, call, aur email se available hai.", "type": "faq"},
-        {"id": 40, "text": "User data enterprise-level security se protect hai.", "type": "faq"},
-
-        # Franchise
-        {"id": 41, "text": "Franchise investment: Rs 5,00,000. Earning potential: Rs 1,00,000 se Rs 3,00,000 per month. Benefits: recurring income, 60-70% margins, exclusive city rights.", "type": "franchise"},
-
-        # Contact
-        {"id": 42, "text": "Contact: Phone 9283344726, Email info@limbu.ai, Location Gurugram India.", "type": "contact"},
-
-        # Sales hooks — for better retrieval on business growth queries
-        {"id": 43, "text": "Agar aapki GMB profile already hai toh Limbu.ai se use automate karo. AI daily posts generate karega, reviews manage karega, aur near me ranking improve hogi.", "type": "sales"},
-        {"id": 44, "text": "Restaurant, dhaba, ya food business ke liye Limbu.ai bahut effective hai. Local SEO aur Google posts se near me searches mein top rank milta hai.", "type": "sales"},
-        {"id": 45, "text": "Salon, clinic, gym, ya koi bhi local service business Limbu.ai se grow kar sakta hai. Social media automation aur review management se customer trust badhta hai.", "type": "sales"},
-        {"id": 46, "text": "Limbu.ai se business connect karne ke steps: GMB profile connect karo, Facebook aur Instagram connect karo, phir AI automatically content banayega aur post karega.", "type": "sales"},
-        {"id": 47, "text": "Naye business ke liye Basic Plan Rs 2500/month best hai. Established business ke liye Professional Plan Rs 5500/month ya Premium Plan Rs 7500/month recommended hai.", "type": "sales"},
-    ]
+        
+  {
+    "id": 1,
+    "text": "Limbu.ai is an AI-powered marketing platform that automates Google Business Profile, Facebook, and Instagram to improve local SEO.",
+    "type": "about"
+  },
+  {
+    "id": 2,
+    "text": "Limbu.ai helps businesses improve local SEO, boost near me rankings, automate social media, and generate leads.",
+    "type": "use_case"
+  },
+  {
+    "id": 3,
+    "text": "AI Post Generation automatically creates captions, hashtags, and SEO-optimized content that users can review and publish.",
+    "type": "feature"
+  },
+  {
+    "id": 4,
+    "text": "Smart Scheduling publishes posts automatically at the best time across multiple platforms.",
+    "type": "feature"
+  },
+  {
+    "id": 5,
+    "text": "Review Management uses AI to suggest replies to customer reviews, which can be edited or sent instantly.",
+    "type": "feature"
+  },
+  {
+    "id": 6,
+    "text": "Magic QR filters negative reviews and collects private feedback to improve public ratings.",
+    "type": "feature"
+  },
+  {
+    "id": 7,
+    "text": "The dashboard allows users to manage multiple business locations and track performance insights in one place.",
+    "type": "feature"
+  },
+  {
+    "id": 8,
+    "text": "To log in, enter your mobile number, receive an OTP, and verify it to access the dashboard.",
+    "type": "how_to"
+  },
+  {
+    "id": 9,
+    "text": "If OTP is not received, check your network, verify your number, and use the resend OTP option.",
+    "type": "issue"
+  },
+  {
+    "id": 10,
+    "text": "To create a post, go to Post Management, select your business, generate a post using AI, and publish or schedule it.",
+    "type": "how_to"
+  },
+  {
+    "id": 11,
+    "text": "To connect accounts, go to settings, click on Connect Accounts, and log in with Google or Facebook.",
+    "type": "how_to"
+  },
+  {
+    "id": 12,
+    "text": "Basic Plan costs 2500 per month and includes 15 GMB posts, 5 citations, review reply system, and Magic QR.",
+    "type": "pricing"
+  },
+  {
+    "id": 13,
+    "text": "Professional Plan costs 5500 per month and includes 30 GMB posts, 12 citations, review management, and insights dashboard.",
+    "type": "pricing"
+  },
+  {
+    "id": 14,
+    "text": "Premium Plan costs 7500 per month and includes 45 GMB posts, 15 citations, and advanced automation.",
+    "type": "pricing"
+  },
+  {
+    "id": 15,
+    "text": "GMB Assistance Plan costs 2500 and provides Google Business Profile management support.",
+    "type": "pricing"
+  },
+  {
+    "id": 16,
+    "text": "GMB Creation Plan costs 3000 and includes creating a new Google Business Profile.",
+    "type": "pricing"
+  },
+  {
+    "id": 17,
+    "text": "Starter Website plan costs 9999 and includes a 5-page website.",
+    "type": "pricing"
+  },
+  {
+    "id": 18,
+    "text": "Business Website plan costs 25000 and includes a 15-page professional website.",
+    "type": "pricing"
+  },
+  {
+    "id": 19,
+    "text": "Enterprise Website plan costs 48000 and includes 35 pages with eCommerce functionality.",
+    "type": "pricing"
+  },
+  {
+    "id": 20,
+    "text": "Basic SEO plan costs 5999 per month and includes SEO optimization services.",
+    "type": "pricing"
+  },
+  {
+    "id": 21,
+    "text": "Standard SEO plan costs 9999 per month and includes advanced SEO services.",
+    "type": "pricing"
+  },
+  {
+    "id": 22,
+    "text": "Advanced SEO plan costs 15999 per month and includes high-level SEO optimization.",
+    "type": "pricing"
+  },
+  {
+    "id": 23,
+    "text": "Google Ads setup costs 2500 and Meta Ads setup costs 3500.",
+    "type": "pricing"
+  },
+  {
+    "id": 24,
+    "text": "Limbu.ai uses secure OAuth and does not store user passwords.",
+    "type": "faq"
+  },
+  {
+    "id": 25,
+    "text": "Users can manage multiple business locations from a single dashboard.",
+    "type": "faq"
+  },
+  {
+    "id": 26,
+    "text": "AI automatically generates content which users can edit and approve.",
+    "type": "faq"
+  },
+  {
+    "id": 27,
+    "text": "Results typically start appearing within 2 to 4 weeks.",
+    "type": "faq"
+  },
+  {
+    "id": 28,
+    "text": "The platform is beginner-friendly and does not require technical skills.",
+    "type": "faq"
+  },
+  {
+    "id": 29,
+    "text": "Posts can be scheduled in advance.",
+    "type": "faq"
+  },
+  {
+    "id": 30,
+    "text": "Limbu.ai supports both Facebook and Instagram.",
+    "type": "faq"
+  },
+  {
+    "id": 31,
+    "text": "Magic QR filters negative reviews and collects private feedback.",
+    "type": "faq"
+  },
+  {
+    "id": 32,
+    "text": "Users can edit AI-generated content before publishing.",
+    "type": "faq"
+  },
+  {
+    "id": 33,
+    "text": "Regular activity helps improve Google rankings.",
+    "type": "faq"
+  },
+  {
+    "id": 34,
+    "text": "A limited free trial is available.",
+    "type": "faq"
+  },
+  {
+    "id": 35,
+    "text": "The platform is suitable for restaurants, salons, clinics, gyms, and other local businesses.",
+    "type": "faq"
+  },
+  {
+    "id": 36,
+    "text": "Performance analytics and insights are available in the dashboard.",
+    "type": "faq"
+  },
+  {
+    "id": 37,
+    "text": "Team collaboration is supported.",
+    "type": "faq"
+  },
+  {
+    "id": 38,
+    "text": "AI suggests replies to customer reviews based on feedback.",
+    "type": "faq"
+  },
+  {
+    "id": 39,
+    "text": "User data is protected with enterprise-level security.",
+    "type": "faq"
+  },
+  {
+    "id": 40,
+    "text": "Users can cancel their plan anytime without long-term contracts.",
+    "type": "faq"
+  },
+  {
+    "id": 41,
+    "text": "Support is available via chat, call, and email.",
+    "type": "faq"
+  },
+  {
+    "id": 42,
+    "text": "Optimized profiles help increase lead generation.",
+    "type": "faq"
+  },
+  {
+    "id": 43,
+    "text": "Limbu.ai combines AI automation, review management, and social media in one platform.",
+    "type": "faq"
+  },
+  {
+    "id": 44,
+    "text": "Individuals can also use the platform for personal branding.",
+    "type": "faq"
+  },
+  {
+    "id": 45,
+    "text": "Setup takes approximately 15 to 30 minutes.",
+    "type": "faq"
+  },
+  {
+    "id": 46,
+    "text": "Onboarding and training tutorials are available.",
+    "type": "faq"
+  },
+  {
+    "id": 47,
+    "text": "Franchise investment is 500000 with an earning potential of 100000 to 300000 per month.",
+    "type": "franchise"
+  },
+  {
+    "id": 48,
+    "text": "Franchise benefits include recurring income, 60 to 70 percent margins, and exclusive city rights.",
+    "type": "franchise"
+  },
+  {
+    "id": 49,
+    "text": "Contact via phone at 9283344726 or email at info@limbu.ai.",
+    "type": "contact"
+  },
+  {
+    "id": 50,
+    "text": "The company is located in Gurugram, India.",
+    "type": "contact"
+  }
+]
