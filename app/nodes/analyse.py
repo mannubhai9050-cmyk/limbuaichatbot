@@ -1,6 +1,7 @@
 from app.extractors.business_extractor import extract_gmb_score
-from app.services.redis_service import save_session
+from app.services.redis_service import save_session, get_session
 from app.core.config import LIMBU_CONNECT_URL
+import uuid
 
 
 def handle_analyse(user_id: str, session: dict) -> str:
@@ -38,6 +39,13 @@ def handle_analyse(user_id: str, session: dict) -> str:
     else:
         growth_msg = "Profile mein kaafi gaps hain jo aapke customers ko rok rahi hain."
 
+    # Generate session_id for connect link
+    if not session.get("connect_session_id"):
+        session["connect_session_id"] = uuid.uuid4().hex[:16]
+        save_session(user_id, session)
+    connect_session_id = session["connect_session_id"]
+    connect_url = f"{LIMBU_CONNECT_URL}?session_id={connect_session_id}"
+
     report = f"""**Google Business Profile — {name}**
 
 📊 Score: **{score}/100** — {grade} {color}
@@ -60,7 +68,7 @@ def handle_analyse(user_id: str, session: dict) -> str:
 
 ━━━━━━━━━━━━━━━━━━━━━━━━
 🔗 **Apna business Limbu.ai se connect karein:**
-{LIMBU_CONNECT_URL}
+{connect_url}
 
 Connect karein taaki hum directly aapki profile manage karein aur growth track karein. Jab connect ho jaye, mujhe batayein! 😊"""
 

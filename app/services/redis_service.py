@@ -58,19 +58,22 @@ def clear_session(user_id: str):
 
 def get_all_users() -> list:
     try:
-        users = r.smembers("all_users")
+        # Get all users from chat:* keys directly
+        chat_keys = r.keys("chat:*")
         result = []
-        for uid in users:
-            uid = uid.decode() if isinstance(uid, bytes) else uid
+        for key in chat_keys:
+            key = key.decode() if isinstance(key, bytes) else key
+            uid = key.replace("chat:", "")
             history = get_history(uid)
             last_active = r.get(f"last_active:{uid}")
             last_active = last_active.decode() if last_active else "Unknown"
-            result.append({
-                "user_id": uid,
-                "message_count": len(history),
-                "last_active": last_active,
-                "last_message": history[-1]["content"][:60] + "..." if history else ""
-            })
+            if history:  # Only show users with messages
+                result.append({
+                    "user_id": uid,
+                    "message_count": len(history),
+                    "last_active": last_active,
+                    "last_message": history[-1]["content"][:60] + "..." if history else ""
+                })
         result.sort(key=lambda x: x["last_active"], reverse=True)
         return result
     except Exception as e:

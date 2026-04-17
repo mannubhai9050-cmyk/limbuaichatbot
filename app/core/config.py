@@ -17,7 +17,7 @@ LIMBU_ADMIN_EMAIL = "info@limbu.ai"
 LIMBU_CONNECT_URL = "http://limbu.ai/connect-google-business"
 
 # ── App Settings ──────────────────────────────────────────────────
-MAX_CHAT_HISTORY = 20
+MAX_CHAT_HISTORY = 100
 SESSION_TTL = 3600        # 1 hour
 CHAT_TTL = 604800         # 7 days
 QDRANT_COLLECTION = "limbu_kb"
