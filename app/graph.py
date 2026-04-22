@@ -86,53 +86,6 @@ def _try_extract_business(message: str, session: dict):
 
 
 # ── Background Polling ────────────────────────────────────────────
-def start_connection_polling(user_id: str, session_id: str):
-    """Poll API every 3 seconds for 5 minutes"""
-    def poll():
-        import httpx
-        from app.core.config import LIMBU_API_BASE
-        max_attempts = 100  # 5 min (100 x 3sec)
-        for attempt in range(max_attempts):
-            time.sleep(3)
-            try:
-                session = get_session(user_id)
-                # Stop if already verified
-                if session.get("connect_verified"):
-                    print(f"[Poll] Already verified, stopping for {user_id}")
-                    break
-                # Stop if session_id changed (new connect link sent)
-                if session.get("connect_session_id") != session_id:
-                    print(f"[Poll] Session changed, stopping old poll for {user_id}")
-                    break
-
-                res = httpx.get(
-                    f"{LIMBU_API_BASE}/gmb/status",
-                    params={"session_id": session_id},
-                    timeout=10
-                )
-                data = res.json()
-                print(f"[Poll] {user_id} attempt {attempt+1}: {data.get('status')}")
-
-                if data.get("status") == "success" or data.get("success"):
-                    email = data.get("email", "")
-                    if email:
-                        session["connected_email"] = email
-                    session["connect_verified"] = True
-                    save_session(user_id, session)
-                    # Use updated session for smart response
-                    reply = handle_check_latest_connection(user_id, session)
-                    save_message(user_id, "assistant", reply)
-                    print(f"[Poll] ✅ Connected! User: {user_id}, Email: {email}")
-                    break
-            except Exception as e:
-                print(f"[Poll] Error: {e}")
-                time.sleep(5)  # Wait longer on error
-
-    thread = threading.Thread(target=poll, daemon=True)
-    thread.start()
-    print(f"[Poll] Started for user {user_id}, session {session_id}")
-
-
 # ── State ─────────────────────────────────────────────────────────
 class ChatState(TypedDict, total=False):
     user_id: str
@@ -210,7 +163,8 @@ def _detect_action(text: str) -> str:
     actions = [
         "SEARCH_BUSINESS", "NEXT_RESULT", "ANALYSE",
         "CONNECT_BUSINESS", "CHECK_LATEST_CONNECTION",
-        "CHECK_BUSINESS_EMAIL", "BOOK_DEMO", "CHECK_USER"
+        "CHECK_BUSINESS_EMAIL", "BOOK_DEMO", "CHECK_USER",
+        "SHOW_PLAN", "CHECK_PAYMENT"
     ]
     for action in actions:
         if f"[ACTION:{action}]" in text:
@@ -220,8 +174,10 @@ def _detect_action(text: str) -> str:
 
 # ── Nodes ─────────────────────────────────────────────────────────
 def node_respond(state: ChatState) -> ChatState:
-    save_message(state["user_id"], "assistant", state["raw_reply"])
-    state["response"] = state["raw_reply"]
+    user_id = state["user_id"]
+    reply = state["raw_reply"]
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
     return state
 
 
@@ -279,11 +235,7 @@ def node_connect_business(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
     reply = handle_connect_link(user_id, session)
-    # Start background polling
-    session = get_session(user_id)
-    session_id = session.get("connect_session_id", "")
-    if session_id:
-        start_connection_polling(user_id, session_id)
+    # NOTE: Polling is handled by analyse.py — no duplicate polling here
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -359,6 +311,74 @@ def node_check_user(state: ChatState) -> ChatState:
     return state
 
 
+def node_show_plan(state: ChatState) -> ChatState:
+    """Show plan details with payment link"""
+    user_id = state["user_id"]
+    raw = state.get("raw_reply", "")
+    import re as _re
+    match = _re.search(r'\[ACTION:SHOW_PLAN\](.*?)\[/ACTION\]', raw, re.DOTALL)
+    if match:
+        params = extract_action_params(match.group(1))
+        plan_name = params.get("plan", "Professional Plan")
+        cycle = params.get("cycle", "monthly")
+        from app.services.plans_service import get_plan_by_name, format_plan_message
+        plan = get_plan_by_name(plan_name, cycle)
+        if plan:
+            session = get_session(user_id)
+            session_id = session.get("connect_session_id", "")
+            plan_msg = format_plan_message(plan, session_id)
+            reply = (
+                f"Yeh hai aapke liye best plan:\n\n"
+                f"{plan_msg}\n\n"
+                f"Payment link pe click karke directly subscribe kar sakte hain. "
+                f"Koi sawaal ho toh batayein! 😊"
+            )
+        else:
+            reply = f"Plan details fetch karne mein problem aayi. Kripya 📞 9283344726 par call karein."
+    else:
+        reply = "Kaunsa plan dekhna chahte hain? Basic, Professional, ya Premium? 😊"
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
+    return state
+
+
+def node_check_payment(state: ChatState) -> ChatState:
+    """Check payment status"""
+    user_id = state["user_id"]
+    session = get_session(user_id)
+    email = session.get("connected_email", "")
+
+    if email:
+        import httpx
+        from app.core.config import LIMBU_API_BASE
+        try:
+            with httpx.Client(timeout=10) as client:
+                res = client.get(
+                    f"{LIMBU_API_BASE}/users",
+                    params={"email": "info@limbu.ai", "search": email}
+                )
+                data = res.json()
+                if data.get("success") and data.get("users"):
+                    user_data = data["users"][0]
+                    sub = user_data.get("subscription", {})
+                    status = sub.get("status", "")
+                    plan_name = sub.get("planName", "")
+                    if status == "active":
+                        reply = "🎉 **Payment confirmed!**\n\n" + f"✅ **{plan_name}** active ho gaya hai.\n\n" + "Hamari team aapke GMB profile par kaam shuru kar degi.\nInvoice aapki email par bhej diya jayega.\n\nShukriya aapka! 🙏"
+                    else:
+                        reply = "Abhi payment confirm nahi mili. 🤔\n\nThodi der mein update ho jayega.\nYa call karein: 📞 9283344726"
+                else:
+                    reply = "Payment status check karne mein problem aayi. Kripya 📞 9283344726 par call karein."
+        except Exception as e:
+            reply = "Technical problem aayi. Kripya 📞 9283344726 par call karein."
+    else:
+        reply = "Kripya apni registered email batayein taaki payment verify kar sakein."
+
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
+    return state
+
+
 # ── Router ────────────────────────────────────────────────────────
 def router(state: ChatState) -> str:
     return state.get("action", "RESPOND")
@@ -379,6 +399,8 @@ def build_graph():
     graph.add_node("check_business_email", node_check_business_email)
     graph.add_node("book_demo", node_book_demo)
     graph.add_node("check_user", node_check_user)
+    graph.add_node("show_plan", node_show_plan)
+    graph.add_node("check_payment", node_check_payment)
 
     graph.set_entry_point("entry")
     graph.add_conditional_edges("entry", router, {
@@ -392,11 +414,14 @@ def build_graph():
         "CHECK_BUSINESS_EMAIL": "check_business_email",
         "BOOK_DEMO": "book_demo",
         "CHECK_USER": "check_user",
+        "SHOW_PLAN": "show_plan",
+        "CHECK_PAYMENT": "check_payment",
     })
 
     for node in ["respond", "confirmed", "search_business", "next_result",
                  "analyse", "connect_business", "check_latest_connection",
-                 "check_business_email", "book_demo", "check_user"]:
+                 "check_business_email", "book_demo", "check_user",
+                 "show_plan", "check_payment"]:
         graph.add_edge(node, END)
 
     return graph.compile()
