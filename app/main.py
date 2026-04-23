@@ -9,7 +9,7 @@ load_dotenv()
 
 from app.graph import chat
 from app.qdrant_db import insert_data
-from app.services.redis_service import get_history, clear_history, get_all_users, r, get_session, save_message
+from app.services.redis_service import get_history, clear_history, get_all_users, r, get_session, save_message, save_session
 
 app = FastAPI(title="Limbu.ai Chatbot API", version="4.0.0")
 
@@ -144,6 +144,61 @@ def delete_history(user_id: str):
     clear_history(user_id)
     return {"message": f"Cleared for {user_id}"}
 
+
+@app.post("/webhook/action-complete")
+async def webhook_action_complete(request: Request):
+    """Receive action completion from Limbu.ai dashboard"""
+    try:
+        body = await request.json()
+        session_id = body.get("session_id", "")
+        action = body.get("action", "")
+        status = body.get("status", "")
+        result = body.get("result", {})
+
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id required")
+
+        session_keys = r.keys("session:*")
+        user_id = None
+        for key in session_keys:
+            key = key.decode() if isinstance(key, bytes) else key
+            uid = key.replace("session:", "")
+            sess = get_session(uid)
+            if sess.get("connect_session_id") == session_id:
+                user_id = uid
+                break
+
+        if not user_id:
+            return {"status": "session not found"}
+
+        labels = {
+            "health_score": "Full Health Score Report",
+            "magic_qr": "Magic QR Code",
+            "website": "Optimized Website",
+            "insights": "Business Insights",
+            "social_posts": "Social Media Posts"
+        }
+        label = labels.get(action, action)
+
+        if status == "success":
+            msg = "✅ **" + label + " ready hai!**\n\n"
+            if result.get("message"):
+                msg += str(result["message"]) + "\n"
+            if result.get("url"):
+                msg += "\n🔗 " + str(result["url"])
+            if result.get("qr_url"):
+                msg += "\n🔮 QR Code: " + str(result["qr_url"])
+            if result.get("website_url"):
+                msg += "\n🌐 Website: " + str(result["website_url"])
+        else:
+            msg = "❌ " + label + " mein problem aayi. Kripya 📞 9283344726 par call karein."
+
+        save_message(user_id, "assistant", msg)
+        return {"status": "ok", "user_id": user_id}
+
+    except Exception as e:
+        print(f"[Webhook Action] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 def health():

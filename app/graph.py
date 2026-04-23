@@ -164,7 +164,7 @@ def _detect_action(text: str) -> str:
         "SEARCH_BUSINESS", "NEXT_RESULT", "ANALYSE",
         "CONNECT_BUSINESS", "CHECK_LATEST_CONNECTION",
         "CHECK_BUSINESS_EMAIL", "BOOK_DEMO", "CHECK_USER",
-        "SHOW_PLAN", "CHECK_PAYMENT"
+        "SHOW_PLAN", "CHECK_PAYMENT", "DASHBOARD_ACTION"
     ]
     for action in actions:
         if f"[ACTION:{action}]" in text:
@@ -305,7 +305,7 @@ def node_check_user(state: ChatState) -> ChatState:
         ])
         reply = follow_up.content.strip()
     else:
-        reply = "Kripya phone number batayein. 😊"
+        reply = "Kripya phone number batayein. "
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -379,6 +379,84 @@ def node_check_payment(state: ChatState) -> ChatState:
     return state
 
 
+def node_dashboard_action(state: ChatState) -> ChatState:
+    """Trigger Limbu.ai dashboard action"""
+    user_id = state["user_id"]
+    session = get_session(user_id)
+    raw = state.get("raw_reply", "")
+
+    import re as _re
+    match = _re.search(r'\[ACTION:DASHBOARD_ACTION\](.*?)\[/ACTION\]', raw, re.DOTALL)
+
+    if not match:
+        reply = "Kripya batayein — Health Score, Magic QR, Website, ya Insights mein se kya chahiye? 😊"
+        save_message(user_id, "assistant", reply)
+        state["response"] = reply
+        return state
+
+    params = extract_action_params(match.group(1))
+    action = params.get("action", "")
+    location_id = params.get("location_id", "")
+    email = params.get("email", session.get("connected_email", ""))
+    session_id = session.get("connect_session_id", "")
+
+    # Get location_id from session if not provided
+    if not location_id and session.get("connected_businesses"):
+        bizs = session["connected_businesses"]
+        if bizs:
+            location_id = bizs[0].get("locationResourceName", "")
+
+    action_labels = {
+        "health_score": "Full Health Score Report",
+        "magic_qr": "Magic QR Code",
+        "website": "Optimized Website",
+        "insights": "Business Insights",
+        "social_posts": "Social Media Posts"
+    }
+    action_label = action_labels.get(action, action)
+
+    # Show processing message
+    reply = f"⏳ **{action_label}** generate ho raha hai...\n\nThodi der mein ready ho jayega. Main aapko notify kar doongi! 😊"
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
+
+    # Save action in session
+    session["pending_action"] = {
+        "action": action,
+        "location_id": location_id,
+        "email": email,
+        "label": action_label
+    }
+    save_session(user_id, session)
+
+    # Trigger action API in background
+    import threading
+    def _trigger():
+        from app.services.actions_service import trigger_action
+        from app.services.redis_service import save_message as _save
+        result = trigger_action(action, session_id, location_id, email)
+        if result.get("success"):
+            msg = (
+                f"✅ **{action_label} ready hai!**\n\n"
+                f"{result.get('message', '')}\n"
+            )
+            if result.get("url"):
+                msg += f"\n🔗 {result['url']}"
+            if result.get("qr_url"):
+                msg += f"\n🔮 QR Code: {result['qr_url']}"
+        else:
+            msg = (
+                f"⏳ **{action_label}** process ho raha hai.\n\n"
+                f"Ready hone pe aapko notify kiya jayega. "
+                f"Ya check karein: 📞 9283344726"
+            )
+        _save(user_id, "assistant", msg)
+        print(f"[Action] {action} complete for {user_id}")
+
+    threading.Thread(target=_trigger, daemon=True).start()
+    return state
+
+
 # ── Router ────────────────────────────────────────────────────────
 def router(state: ChatState) -> str:
     return state.get("action", "RESPOND")
@@ -401,6 +479,7 @@ def build_graph():
     graph.add_node("check_user", node_check_user)
     graph.add_node("show_plan", node_show_plan)
     graph.add_node("check_payment", node_check_payment)
+    graph.add_node("dashboard_action", node_dashboard_action)
 
     graph.set_entry_point("entry")
     graph.add_conditional_edges("entry", router, {
@@ -416,12 +495,13 @@ def build_graph():
         "CHECK_USER": "check_user",
         "SHOW_PLAN": "show_plan",
         "CHECK_PAYMENT": "check_payment",
+        "DASHBOARD_ACTION": "dashboard_action",
     })
 
     for node in ["respond", "confirmed", "search_business", "next_result",
                  "analyse", "connect_business", "check_latest_connection",
                  "check_business_email", "book_demo", "check_user",
-                 "show_plan", "check_payment"]:
+                 "show_plan", "check_payment", "dashboard_action"]:
         graph.add_edge(node, END)
 
     return graph.compile()
