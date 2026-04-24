@@ -55,7 +55,7 @@ Kya main aapki GMB ki poori Health Report nikaal dun? 📊"
 
 Feature 2 — Insights:
 "Aur kya main aapke business ki Google Insights dikhaun? 📈
-Kitne log aapko search kar rahe hain, clicks, calls sab pata chalega."
+Kितने log aapko search kar rahe hain, clicks, calls sab pata chalega."
 → Wait for YES → trigger action
 
 Feature 3 — Magic QR:
@@ -156,3 +156,16 @@ def _build_context(session: dict) -> str:
     if session.get("payment_notified"):
         parts.append("• Payment done — congratulate and confirm plan activation")
     return "\n".join(parts)
+
+
+# ── Templates (used by other modules) ─────────────────────────────────────────
+BUSINESS_FOUND_TEMPLATE = """{prefix}
+
+🏪 **{name}**
+📍 {address}
+⭐ {rating}/5 ({reviews} reviews)
+🔗 {maps_url}
+
+Kya yeh aapka business hai?"""
+
+ANALYSIS_REPORT_TEMPLATE = """{report}"""
