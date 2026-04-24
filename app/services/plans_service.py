@@ -59,17 +59,22 @@ def get_plan_by_name(plan_name: str, cycle: str = "monthly") -> dict | None:
     return None
 
 
-def format_plan_message(plan: dict, session_id: str = "") -> str:
-    """Format plan details as chat message with session_id in payment link"""
+def format_plan_message(plan: dict, session_id: str = "", user_id: str = "") -> str:
+    """Format plan details as chat message with session_id or phone in payment link"""
     features = "\n".join([f"  ✅ {f}" for f in plan.get("features", [])])
     save_text = f"\n💰 **Aap bachayenge: ₹{plan['save']}**" if plan.get("save") else ""
     discount_text = f" ({plan['discount']}% off)" if plan.get("discount") else ""
 
-    # Add session_id to payment link
+    # Add phone or session_id to payment link
     payment_link = plan.get("paymentLink", "")
-    if session_id and payment_link:
-        sep = "&" if "?" in payment_link else "?"
-        payment_link = f"{payment_link}{sep}session_id={session_id}"
+    if payment_link:
+        if user_id and user_id.startswith("wa_"):
+            phone = user_id.replace("wa_", "")
+            sep = "&" if "?" in payment_link else "?"
+            payment_link = f"{payment_link}{sep}phone={phone}"
+        elif session_id:
+            sep = "&" if "?" in payment_link else "?"
+            payment_link = f"{payment_link}{sep}session_id={session_id}"
 
     return (
         f"**{plan['title']}** — {plan['label']}{discount_text}\n\n"

@@ -305,7 +305,7 @@ def node_check_user(state: ChatState) -> ChatState:
         ])
         reply = follow_up.content.strip()
     else:
-        reply = "Kripya phone number batayein. "
+        reply = "Kripya phone number batayein. 😊"
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -326,7 +326,7 @@ def node_show_plan(state: ChatState) -> ChatState:
         if plan:
             session = get_session(user_id)
             session_id = session.get("connect_session_id", "")
-            plan_msg = format_plan_message(plan, session_id)
+            plan_msg = format_plan_message(plan, session_id, user_id)
             reply = (
                 f"Yeh hai aapke liye best plan:\n\n"
                 f"{plan_msg}\n\n"

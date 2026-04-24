@@ -28,7 +28,12 @@ def handle_analyse(user_id: str, session: dict) -> str:
     session["payment_notified"] = False
     save_session(user_id, session)
 
-    connect_url = f"{LIMBU_CONNECT_URL}?session_id={connect_session_id}"
+    # WhatsApp users - use phone number in link
+    if user_id.startswith("wa_"):
+        phone = user_id.replace("wa_", "")
+        connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
+    else:
+        connect_url = f"{LIMBU_CONNECT_URL}?session_id={connect_session_id}"
     name = place.get("displayName", {}).get("text", "Your Business")
     score = analysis["score"]
 

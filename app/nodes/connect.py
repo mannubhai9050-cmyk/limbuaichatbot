@@ -119,13 +119,10 @@ def _build_response(session: dict, locations: list, email: str) -> str:
             msg += f"\n**Is account se aur {len(locations)-1} profile(s) bhi linked hain.**\n"
         msg += (
             "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🎁 **Aapke liye 5 FREE features:**\n\n"
-            "1. 📊 **GMB Health Score** — Detailed profile health report\n"
-            "2. 📈 **GMB Insights** — Analytics, views, clicks\n"
-            "3. 🔮 **Magic QR Code** — Automatic review collection\n"
-            "4. 💬 **Review Reply** — AI-powered review responses\n"
-            "5. 🔑 **Keyword Planner** — Business keywords + search volume\n\n"
-            "Kaunsa feature chahiye? (1/2/3/4/5 ya naam batayein) 😊"
+            "🎁 **Aapke liye 5 FREE features hain!**\n\n"
+            "Pehle — kya main aapki **GMB Health Score Report** nikaal dun? 📊\n"
+            "Isse pata chalega aapka profile kitna strong hai aur kya improve karna hai.\n\n"
+            "Bas 'haan' bolein! 😊"
         )
         if address:
             msg += f"📍 {address}\n"
