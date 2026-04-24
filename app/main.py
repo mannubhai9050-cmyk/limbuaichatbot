@@ -200,6 +200,247 @@ async def webhook_action_complete(request: Request):
         print(f"[Webhook Action] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/webhook/whatsapp")
+async def webhook_whatsapp(request: Request):
+    """Receive WhatsApp messages and reply"""
+    try:
+        body = await request.json()
+        print(f"[WA Webhook] Received: {body}")
+
+        # Extract message details
+        event = body.get("event", "")
+        if event != "message.received":
+            return {"status": "ignored"}
+
+        contact = body.get("contact", {})
+        phone = str(contact.get("phone", ""))
+        message_data = body.get("message", {})
+        msg_type = message_data.get("type", "")
+        
+        # Only handle text messages
+        if msg_type != "text":
+            return {"status": "non-text ignored"}
+
+        user_message = message_data.get("content", "").strip()
+        if not user_message:
+            return {"status": "empty message"}
+
+        # Use phone as user_id
+        user_id = f"wa_{phone}"
+
+        print(f"[WA] From {phone}: {user_message}")
+
+        # Process through chatbot
+        response = chat(user_id, user_message)
+
+        # Send reply via WhatsApp API
+        from app.services.whatsapp_service import send_whatsapp
+        
+        # Split long messages (WhatsApp limit ~4096 chars)
+        if len(response) > 4000:
+            chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
+            for chunk in chunks:
+                send_whatsapp(phone, chunk)
+        else:
+            send_whatsapp(phone, response)
+
+        # Also check for auto-messages (polling notifications)
+        # These will be handled by polling thread automatically
+
+        return {"status": "ok"}
+
+    except Exception as e:
+        print(f"[WA Webhook] Error: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
+@app.get("/api/admin/stats")
+def admin_stats():
+    from app.services.analytics_service import get_stats
+    return get_stats()
+
+@app.get("/api/admin/payments")
+def admin_payments():
+    from app.services.analytics_service import get_payments
+    return {"payments": get_payments()}
+
+@app.get("/api/admin/connections")
+def admin_connections():
+    from app.services.analytics_service import get_connected_businesses
+    return {"connections": get_connected_businesses()}
+
+@app.get("/api/admin/user-events/{user_id}")
+def admin_user_events(user_id: str):
+    from app.services.analytics_service import get_user_events
+    return {"events": get_user_events(user_id)}
+
+@app.get("/analytics", response_class=HTMLResponse)
+def analytics_dashboard():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Limbu.ai Analytics</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+.header{background:linear-gradient(135deg,#16a34a,#059669);padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{color:white;font-size:20px;font-weight:700}
+.header a{color:#bbf7d0;font-size:13px;text-decoration:none}
+.tabs{display:flex;gap:4px;padding:16px 24px 0;background:#1e293b;border-bottom:1px solid #334155}
+.tab{padding:10px 20px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px;font-weight:600;color:#64748b;transition:.15s}
+.tab.active{background:#0f172a;color:#4ade80}
+.content{padding:24px;display:none}
+.content.active{display:block}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
+.card{background:#1e293b;border-radius:12px;padding:20px;border:1px solid #334155}
+.card-label{font-size:12px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}
+.card-value{font-size:32px;font-weight:700;color:#4ade80}
+.card-sub{font-size:12px;color:#475569;margin-top:4px}
+.table-wrap{background:#1e293b;border-radius:12px;overflow:hidden;border:1px solid #334155}
+table{width:100%;border-collapse:collapse}
+th{background:#162032;padding:12px 16px;text-align:left;font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:1px}
+td{padding:12px 16px;border-bottom:1px solid #1a2535;font-size:13px}
+tr:hover td{background:#1a2535}
+.badge{padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.badge-green{background:#0f3a1e;color:#4ade80}
+.badge-blue{background:#1e3a5f;color:#60a5fa}
+.badge-yellow{background:#3a2e0f;color:#fbbf24}
+.badge-red{background:#3a0f0f;color:#f87171}
+.dot{width:8px;height:8px;background:#4ade80;border-radius:50%;animation:pulse 1.5s infinite;display:inline-block;margin-right:6px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.funnel{display:flex;flex-direction:column;gap:8px;margin-bottom:24px}
+.funnel-row{display:flex;align-items:center;gap:12px}
+.funnel-bar{height:36px;background:#16a34a;border-radius:6px;min-width:4px;transition:width .5s}
+.funnel-label{font-size:13px;color:#94a3b8;white-space:nowrap;width:200px}
+.funnel-val{font-size:14px;font-weight:600;color:#4ade80}
+.empty{padding:40px;text-align:center;color:#475569}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📊 Limbu.ai Analytics Dashboard</h1>
+  <div style="display:flex;gap:16px;align-items:center">
+    <span style="color:#bbf7d0;font-size:13px"><span class="dot"></span>Live</span>
+    <a href="/admin">💬 Chat Admin</a>
+  </div>
+</div>
+<div class="tabs">
+  <div class="tab active" onclick="showTab('overview')">Overview</div>
+  <div class="tab" onclick="showTab('connections')">Connections</div>
+  <div class="tab" onclick="showTab('payments')">Payments</div>
+</div>
+
+<div id="overview" class="content active">
+  <div class="cards" id="cards">Loading...</div>
+  <h3 style="margin-bottom:12px;color:#94a3b8;font-size:14px">CONVERSION FUNNEL</h3>
+  <div class="funnel" id="funnel"></div>
+  <h3 style="margin-bottom:12px;color:#94a3b8;font-size:14px">TODAY'S ACTIVITY</h3>
+  <div class="cards" id="today-cards"></div>
+</div>
+
+<div id="connections" class="content">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>User ID</th><th>Email</th><th>Businesses</th></tr></thead>
+      <tbody id="conn-tbody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="payments" class="content">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>User ID</th><th>Plan</th><th>Amount</th><th>Email</th></tr></thead>
+      <tbody id="pay-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function showTab(name){
+  document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.remove('active')});
+  document.querySelectorAll('.content').forEach(c=>c.classList.remove('active'));
+  document.querySelector(`#${name}`).classList.add('active');
+  event.target.classList.add('active');
+}
+
+const labels = {
+  business_searched:'Businesses Searched',business_confirmed:'Businesses Confirmed',
+  analysis_done:'Analyses Done',business_connected:'Businesses Connected',
+  feature_health_score:'Health Score',feature_insights:'Insights',
+  feature_magic_qr:'Magic QR',feature_review_reply:'Review Reply',
+  feature_keyword_planner:'Keyword Planner',plan_viewed:'Plans Viewed',
+  payment_done:'Payments Done',demo_booked:'Demos Booked',whatsapp_message:'WhatsApp Messages'
+};
+
+async function loadStats(){
+  const d = await(await fetch('/api/admin/stats')).json();
+  
+  // Main cards
+  const mainKeys = ['business_connected','payment_done','demo_booked','analysis_done','whatsapp_message'];
+  document.getElementById('cards').innerHTML = mainKeys.map(k=>`
+    <div class="card">
+      <div class="card-label">${labels[k]||k}</div>
+      <div class="card-value">${d[k]||0}</div>
+      <div class="card-sub">Today: ${d.today?.[k]||0}</div>
+    </div>`).join('');
+
+  // Funnel
+  const funnelKeys = ['business_searched','business_confirmed','analysis_done','business_connected','payment_done'];
+  const maxVal = Math.max(...funnelKeys.map(k=>d[k]||0), 1);
+  document.getElementById('funnel').innerHTML = funnelKeys.map((k,i)=>{
+    const val = d[k]||0;
+    const w = Math.max((val/maxVal)*400, 4);
+    const colors = ['#16a34a','#059669','#0d9488','#0891b2','#7c3aed'];
+    return `<div class="funnel-row">
+      <div class="funnel-label">${labels[k]||k}</div>
+      <div class="funnel-bar" style="width:${w}px;background:${colors[i]}"></div>
+      <div class="funnel-val">${val}</div>
+    </div>`;
+  }).join('');
+
+  // Today cards
+  const todayKeys = ['business_searched','analysis_done','business_connected','payment_done'];
+  document.getElementById('today-cards').innerHTML = todayKeys.map(k=>`
+    <div class="card">
+      <div class="card-label">Today — ${labels[k]||k}</div>
+      <div class="card-value" style="color:#60a5fa">${d.today?.[k]||0}</div>
+    </div>`).join('');
+}
+
+async function loadConnections(){
+  const d = await(await fetch('/api/admin/connections')).json();
+  const tbody = document.getElementById('conn-tbody');
+  if(!d.connections?.length){tbody.innerHTML='<tr><td colspan="4" class="empty">No connections yet</td></tr>';return;}
+  tbody.innerHTML = d.connections.map(c=>`<tr>
+    <td>${c.time||''}</td>
+    <td style="font-size:11px;color:#64748b">${(c.user_id||'').slice(0,20)}...</td>
+    <td>${c.email||'-'}</td>
+    <td><span class="badge badge-green">${c.businesses||0} profile(s)</span></td>
+  </tr>`).join('');
+}
+
+async function loadPayments(){
+  const d = await(await fetch('/api/admin/payments')).json();
+  const tbody = document.getElementById('pay-tbody');
+  if(!d.payments?.length){tbody.innerHTML='<tr><td colspan="5" class="empty">No payments yet</td></tr>';return;}
+  tbody.innerHTML = d.payments.map(p=>`<tr>
+    <td>${p.time||''}</td>
+    <td style="font-size:11px;color:#64748b">${(p.user_id||'').slice(0,20)}...</td>
+    <td><span class="badge badge-blue">${p.plan||'-'}</span></td>
+    <td><span class="badge badge-green">${p.amount||'-'}</span></td>
+    <td>${p.email||'-'}</td>
+  </tr>`).join('');
+}
+
+loadStats();loadConnections();loadPayments();
+setInterval(()=>{loadStats();loadConnections();loadPayments();}, 10000);
+</script>
+</body>
+</html>"""
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "4.0.0"}

@@ -17,7 +17,9 @@ LIMBU_ADMIN_EMAIL = "info@limbu.ai"
 LIMBU_CONNECT_URL = "http://limbu.ai/connect-google-business"
 PLANS_API_URL = "https://www.limbu.ai/api/home-data?type=subscriptionPlans"
 CHATBOT_ACTION_API = "https://limbu.ai/api/chatbot/action"
-CHATBOT_WEBHOOK_URL = "https://limbubot.limbutech.in/webhook/action-complete" 
+CHATBOT_WEBHOOK_URL = "https://limbubot.limbutech.in/webhook/action-complete"
+WHATSAPP_API_URL = "https://whatsapp-one-blond.vercel.app/api/external/send"
+WHATSAPP_API_KEY = "ws_2870c7f6bc8510381dc45e74df26a870d69f0512b17abade" 
 
 # ── App Settings ──────────────────────────────────────────────────
 MAX_CHAT_HISTORY = 100

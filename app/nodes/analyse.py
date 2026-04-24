@@ -148,6 +148,14 @@ def _poll_connection(user_id: str, session_id: str):
                     reply = handle_check_latest_connection(user_id, sess)
                     _save(user_id, "assistant", reply)
                     print(f"[ConnPoll] ✅ Connected! {user_id} email:{email}")
+                    # Send via WhatsApp if user came from WhatsApp
+                    if user_id.startswith("wa_"):
+                        try:
+                            from app.services.whatsapp_service import send_whatsapp
+                            phone = user_id.replace("wa_", "")
+                            send_whatsapp(phone, reply)
+                        except Exception as wa_e:
+                            print(f"[WA] Send error: {wa_e}")
                     break
 
             except Exception as e:
@@ -181,6 +189,20 @@ def _poll_payment(user_id: str, session_id: str):
                     sess = get_session(user_id)  # Reload fresh
                     if not sess.get("payment_notified"):
                         _send_payment_msg(user_id, data, sess)
+                    # Send via WhatsApp if user came from WhatsApp
+                    if user_id.startswith("wa_"):
+                        try:
+                            from app.services.whatsapp_service import send_whatsapp
+                            phone = user_id.replace("wa_", "")
+                            pay_sess = get_session(user_id)
+                            # Get last assistant message
+                            from app.services.redis_service import get_history
+                            hist = get_history(user_id)
+                            if hist:
+                                last_msg = hist[-1].get("content", "")
+                                send_whatsapp(phone, last_msg)
+                        except Exception as wa_e:
+                            print(f"[WA] Payment send error: {wa_e}")
                     break
 
             except Exception as e:

@@ -51,6 +51,11 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
         session["connected_email"] = email
         session["connected_businesses"] = locations
         save_session(user_id, session)
+        # Track connection
+        try:
+            from app.services.analytics_service import save_connection
+            save_connection(user_id, {"email": email, "businesses": len(locations)})
+        except: pass
 
         return _build_response(session, locations, email)
     else:
@@ -110,8 +115,35 @@ def _build_response(session: dict, locations: list, email: str) -> str:
             msg += f"📞 {phone}\n"
         if website:
             msg += f"🌐 {website}\n"
+        if len(locations) > 1:
+            msg += f"\n**Is account se aur {len(locations)-1} profile(s) bhi linked hain.**\n"
+        msg += (
+            "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🎁 **Aapke liye 5 FREE features:**\n\n"
+            "1. 📊 **GMB Health Score** — Detailed profile health report\n"
+            "2. 📈 **GMB Insights** — Analytics, views, clicks\n"
+            "3. 🔮 **Magic QR Code** — Automatic review collection\n"
+            "4. 💬 **Review Reply** — AI-powered review responses\n"
+            "5. 🔑 **Keyword Planner** — Business keywords + search volume\n\n"
+            "Kaunsa feature chahiye? (1/2/3/4/5 ya naam batayein) 😊"
+        )
+        if address:
+            msg += f"📍 {address}\n"
+        if phone:
+            msg += f"📞 {phone}\n"
+        if website:
+            msg += f"🌐 {website}\n"
 
-        msg += f"\nAb Limbu.ai aapki profile manage karega aur growth track karega.\nKya aap abhi plan lena chahenge? 😊\n📞 9283344726"
+        # Show other businesses too
+        if len(locations) > 1:
+            msg += f"\n**Is account se aur {len(locations)-1} business(es) bhi linked hain:**\n"
+            for b in locations:
+                bname = b.get("title") or b.get("name") or ""
+                if bname.lower() != name.lower():
+                    bv = "✅" if b.get("verified") else "⚠️"
+                    msg += f"  • {bv} {bname}\n"
+
+        msg += f"\nAb Limbu.ai aapki profile manage karega.\nKya aap abhi plan lena chahenge? 😊\n📞 9283344726"
         return msg
 
     else:
