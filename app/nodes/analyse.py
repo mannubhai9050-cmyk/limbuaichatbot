@@ -9,82 +9,71 @@ import httpx
 
 def handle_analyse(user_id: str, session: dict) -> str:
     place = session.get("found_place")
-
     if not place:
         return "Pehle aapka business confirm karna hoga. Business naam aur city batayein? 😊"
-
     if not session.get("confirmed"):
-        return "Kya jo business maine dhundha woh aapka hai? Ek baar confirm kar dein. 😊"
+        return "Kya jo business maine dhundha woh aapka hai? Confirm kar dein. 😊"
 
     analysis = extract_gmb_score(place)
     session["analysis"] = analysis
 
-    if not session.get("connect_session_id"):
-        session["connect_session_id"] = uuid.uuid4().hex[:16]
-    connect_session_id = session["connect_session_id"]
+    # Determine connect URL
+    is_whatsapp = user_id.startswith("wa_")
+    if is_whatsapp:
+        phone = user_id.replace("wa_", "")
+        connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
+        poll_key = phone  # poll by phone
+    else:
+        if not session.get("connect_session_id"):
+            session["connect_session_id"] = uuid.uuid4().hex[:16]
+        connect_url = f"{LIMBU_CONNECT_URL}?session_id={session['connect_session_id']}"
+        poll_key = session["connect_session_id"]
+
     session["connect_link_sent"] = True
     session["connect_verified"] = False
     session["poll_msg_saved"] = False
     session["payment_notified"] = False
+    session["features_offered"] = []
     save_session(user_id, session)
 
-    # WhatsApp users - use phone number in link
-    if user_id.startswith("wa_"):
-        phone = user_id.replace("wa_", "")
-        connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
-    else:
-        connect_url = f"{LIMBU_CONNECT_URL}?session_id={connect_session_id}"
     name = place.get("displayName", {}).get("text", "Your Business")
     score = analysis["score"]
 
-    if score == 100:
-        growth_msg = (
-            "🌟 Profile setup is perfect! But growth ke liye automation chahiye.\n"
-            "Daily posts + Magic QR se 3-4x zyada customers aa sakte hain.\n"
-            "Ek extra booking se poora plan ka cost nikal jaata hai!"
-        )
-    elif score >= 80:
-        growth_msg = "Profile strong hai — automation se growth aur tez ho sakti hai! 💪"
-    elif score >= 55:
+    if score >= 90:
+        growth_msg = "Profile almost perfect hai! Par growth ke liye daily automation chahiye. Ek extra customer se poora plan recover ho jaata hai! 💪"
+    elif score >= 70:
+        growth_msg = "Profile acchi hai — automation se growth aur tez ho sakti hai!"
+    elif score >= 50:
         growth_msg = "Profile average hai — improvements se business significantly grow kar sakta hai."
     else:
         growth_msg = "Profile mein gaps hain jo customers ko rok rahi hain."
 
-    issues_text = "\n".join([f"  • {i}" for i in analysis["issues"]]) if analysis["issues"] else "  • No major issues!"
-    strengths_text = "\n".join([f"  • {s}" for s in analysis["strengths"]]) if analysis["strengths"] else "  • Keep building"
+    issues = "\n".join([f"  • {i}" for i in analysis["issues"]]) if analysis["issues"] else "  • No major issues!"
+    strengths = "\n".join([f"  • {s}" for s in analysis["strengths"]]) if analysis["strengths"] else "  • Keep building!"
 
     report = (
-        f"**Google Business Profile — {name}**\n\n"
-        f"📊 Score: **{score}/100** — {analysis['grade']} {analysis['color']}\n\n"
+        f"**{name} — GMB Score: {score}/100** {analysis['color']}\n\n"
         f"{growth_msg}\n\n"
-        f"**Needs Improvement:**\n{issues_text}\n\n"
-        f"**Working Well:**\n{strengths_text}\n\n"
-        f"**Limbu.ai se kya milega:**\n"
-        f"  • Daily AI posts → 'near me' ranking improve\n"
-        f"  • Magic QR → automatic reviews\n"
-        f"  • AI review replies → customer trust\n"
-        f"  • Social media automation → wider reach\n\n"
-        f"💡 **Best Plan:** {analysis['plan']}\n\n"
+        f"**Sudhar chahiye:**\n{issues}\n\n"
+        f"**Accha hai:**\n{strengths}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔗 **Apna business Limbu.ai se connect karein:**\n"
-        f"{connect_url}\n\n"
-        f"Connect karo — main automatically verify kar doongi aur plan activate kar doongi! 😊"
+        f"🔗 **Business connect karein:**\n{connect_url}\n\n"
+        f"Connect karein — main automatically verify kar doongi! 😊"
     )
 
-    # Start connection polling (fast)
-    _poll_connection(user_id, connect_session_id)
-    # Start payment polling (runs for 30 min)
-    _poll_payment(user_id, connect_session_id)
+    # Start polling
+    _poll_connection(user_id, poll_key, is_whatsapp)
+    _poll_payment(user_id, poll_key, is_whatsapp)
 
     return report
 
 
-def _call_api(session_id: str) -> dict:
-    """Hit the API once"""
+def _call_api(poll_key: str, is_whatsapp: bool) -> dict:
     try:
+        param = "phone" if is_whatsapp else "session_id"
         res = httpx.get(
             f"{LIMBU_API_BASE}/gmb/status",
-            params={"session_id": session_id},
+            params={param: poll_key},
             timeout=10
         )
         return res.json()
@@ -93,74 +82,88 @@ def _call_api(session_id: str) -> dict:
         return {}
 
 
-def _send_payment_msg(user_id: str, data: dict, sess: dict):
-    """Send payment confirmation message"""
-    from app.services.redis_service import save_message as _save
-    p = data.get("payment", {})
-    if isinstance(p, list):
-        p = p[0] if p else {}
-
-    plan_title = p.get("planTitle", "Plan")
-    amount = p.get("amount", "")
-    pay_email = p.get("email") or data.get("email", "")
-    paid_at = p.get("paidAt", "")[:10] if p.get("paidAt") else ""
-    payment_id = p.get("paymentId", "")
-
-    pay_msg = (
-        f"🎉 **Payment successful! Bahut badhaai ho!**\n\n"
-        f"✅ **{plan_title}** active ho gaya!\n\n"
-        f"**Payment Details:**\n"
-        f"  💳 Amount: {amount}\n"
-        f"  📧 Email: {pay_email}\n"
-        f"  📅 Date: {paid_at}\n"
-        f"  🔑 Payment ID: {payment_id}\n\n"
-        f"Hamari team aapke GMB profile par kaam shuru kar degi.\n"
-        f"Invoice aapki email par bhej diya jayega. 🙏\n\n"
-        f"Koi bhi sawaal ho: 📞 9283344726 | 📧 info@limbu.ai"
+def _get_features_message(session: dict, business_name: str) -> str:
+    """First feature offer after connect"""
+    return (
+        f"🎉 **{business_name} connect ho gaya!**\n\n"
+        f"Ab main aapke liye kuch FREE kaam karti hoon.\n\n"
+        f"Pehle — kya main aapki GMB ki poori **Health Report** nikaal dun? 📊\n"
+        f"Score, gaps, improvements — sab yahan milega!"
     )
-    sess["payment_notified"] = True
-    save_session(user_id, sess)
-    _save(user_id, "assistant", pay_msg)
-    print(f"[Poll] ✅ Payment notified! {user_id} — {plan_title}")
 
 
-def _poll_connection(user_id: str, session_id: str):
-    """Poll every 3 sec for connection — stops after connected (max 5 min)"""
+def _poll_connection(user_id: str, poll_key: str, is_whatsapp: bool):
+    """Poll every 3 sec for connection — max 5 min"""
     def run():
         for attempt in range(100):
             time.sleep(3)
             try:
                 sess = get_session(user_id)
-                if sess.get("connect_session_id") != session_id:
-                    break
                 if sess.get("poll_msg_saved"):
                     break
 
-                data = _call_api(session_id)
-                api_status = data.get("status", "")
-                connected = data.get("businessConnected", False)
-                print(f"[ConnPoll] {user_id} attempt {attempt+1}: status={api_status} connected={connected}")
+                data = _call_api(poll_key, is_whatsapp)
+                connected = data.get("businessConnected", False) or data.get("status") == "success"
+                print(f"[ConnPoll] {user_id} attempt {attempt+1}: connected={connected}")
 
-                if (api_status == "success" or connected) and not sess.get("poll_msg_saved"):
+                if connected and not sess.get("poll_msg_saved"):
                     from app.nodes.connect import handle_check_latest_connection
                     from app.services.redis_service import save_message as _save
                     email = data.get("email", "")
+                    locations = data.get("locationsData", [])
                     if email:
                         sess["connected_email"] = email
+                    sess["connected_businesses"] = locations
                     sess["connect_verified"] = True
                     sess["poll_msg_saved"] = True
                     save_session(user_id, sess)
-                    reply = handle_check_latest_connection(user_id, sess)
-                    _save(user_id, "assistant", reply)
-                    print(f"[ConnPoll] ✅ Connected! {user_id} email:{email}")
-                    # Send via WhatsApp if user came from WhatsApp
-                    if user_id.startswith("wa_"):
+
+                    # Build connect success + first feature offer
+                    found = sess.get("found_place", {})
+                    biz_name = found.get("displayName", {}).get("text", "aapka business")
+
+                    # Find confirmed business in locations
+                    confirmed_biz = None
+                    for loc in locations:
+                        loc_name = loc.get("title", "").lower()
+                        if biz_name.lower() in loc_name or loc_name in biz_name.lower():
+                            confirmed_biz = loc
+                            break
+                    if not confirmed_biz and locations:
+                        confirmed_biz = locations[0]
+
+                    if confirmed_biz:
+                        name = confirmed_biz.get("title", biz_name)
+                        address = confirmed_biz.get("address", "")
+                        phone = confirmed_biz.get("primaryPhone", "")
+                        verified = "✅ Verified" if confirmed_biz.get("verified") else "⚠️ Not Verified"
+                        website = confirmed_biz.get("websiteUri", "")
+
+                        msg = f"🎉 **{name} connect ho gaya!**\n\n"
+                        msg += f"📧 {email}\n"
+                        msg += f"🏪 {name} — {verified}\n"
+                        if address:
+                            msg += f"📍 {address}\n"
+                        if phone:
+                            msg += f"📞 {phone}\n"
+                        if website:
+                            msg += f"🌐 {website}\n"
+                        if len(locations) > 1:
+                            msg += f"\n_(Is account se {len(locations)} profiles linked hain)_\n"
+                        msg += f"\nAb main aapke liye kuch FREE kaam karti hoon! 🎁\n\nPehle — kya main aapki GMB ki poori **Health Report** nikaal dun? 📊"
+                    else:
+                        msg = f"🎉 **Business connect ho gaya!**\n\n📧 {email}\n\nAb main aapke liye kuch FREE kaam karti hoon! 🎁\n\nPehle — kya main aapki GMB ki poori **Health Report** nikaal dun? 📊"
+
+                    _save(user_id, "assistant", msg)
+                    print(f"[ConnPoll] ✅ Connected! {user_id}")
+
+                    # Send via WhatsApp if needed
+                    if is_whatsapp:
                         try:
                             from app.services.whatsapp_service import send_whatsapp
-                            phone = user_id.replace("wa_", "")
-                            send_whatsapp(phone, reply)
-                        except Exception as wa_e:
-                            print(f"[WA] Send error: {wa_e}")
+                            send_whatsapp(poll_key, msg)
+                        except Exception as e:
+                            print(f"[WA] Send error: {e}")
                     break
 
             except Exception as e:
@@ -171,43 +174,61 @@ def _poll_connection(user_id: str, session_id: str):
     print(f"[ConnPoll] Started for {user_id}")
 
 
-def _poll_payment(user_id: str, session_id: str):
-    """Poll every 5 sec for payment — runs for 30 min"""
+def _poll_payment(user_id: str, poll_key: str, is_whatsapp: bool):
+    """Poll every 5 sec for payment — max 30 min"""
     def run():
-        for attempt in range(360):  # 30 min (360 x 5sec)
+        for attempt in range(360):
             time.sleep(5)
             try:
                 sess = get_session(user_id)
-                if sess.get("connect_session_id") != session_id:
-                    break
                 if sess.get("payment_notified"):
                     break
 
-                data = _call_api(session_id)
+                data = _call_api(poll_key, is_whatsapp)
                 pay_status = data.get("paymentStatus", "none")
                 pay_obj = data.get("payment")
 
-                print(f"[PayPoll] {user_id} attempt {attempt+1}: paymentStatus={pay_status} | payment={bool(pay_obj)}")
+                if attempt % 12 == 0:
+                    print(f"[PayPoll] {user_id} attempt {attempt+1}: {pay_status}")
 
-                # Payment detected
                 if pay_status == "paid" or (pay_obj and isinstance(pay_obj, dict)):
-                    sess = get_session(user_id)  # Reload fresh
-                    if not sess.get("payment_notified"):
-                        _send_payment_msg(user_id, data, sess)
-                    # Send via WhatsApp if user came from WhatsApp
-                    if user_id.startswith("wa_"):
+                    sess = get_session(user_id)
+                    if sess.get("payment_notified"):
+                        break
+                    p = pay_obj if isinstance(pay_obj, dict) else {}
+                    plan_title = p.get("planTitle", "Plan")
+                    amount = p.get("amount", "")
+                    pay_email = p.get("email") or data.get("email", "")
+                    paid_at = p.get("paidAt", "")[:10] if p.get("paidAt") else ""
+                    payment_id = p.get("paymentId", "")
+
+                    pay_msg = (
+                        f"🎉 **Payment successful! Bahut badhaai ho!**\n\n"
+                        f"✅ **{plan_title}** active ho gaya!\n\n"
+                        f"💳 Amount: {amount}\n"
+                        f"📧 Email: {pay_email}\n"
+                        f"📅 Date: {paid_at}\n"
+                        f"🔑 ID: {payment_id}\n\n"
+                        f"Hamari team kaam shuru kar degi. 🙏\n"
+                        f"Koi sawaal ho: 📞 9283344726"
+                    )
+                    sess["payment_notified"] = True
+                    save_session(user_id, sess)
+                    from app.services.redis_service import save_message as _save
+                    _save(user_id, "assistant", pay_msg)
+                    print(f"[PayPoll] ✅ Payment! {user_id}")
+
+                    if is_whatsapp:
                         try:
                             from app.services.whatsapp_service import send_whatsapp
-                            phone = user_id.replace("wa_", "")
-                            pay_sess = get_session(user_id)
-                            # Get last assistant message
-                            from app.services.redis_service import get_history
-                            hist = get_history(user_id)
-                            if hist:
-                                last_msg = hist[-1].get("content", "")
-                                send_whatsapp(phone, last_msg)
-                        except Exception as wa_e:
-                            print(f"[WA] Payment send error: {wa_e}")
+                            send_whatsapp(poll_key, pay_msg)
+                        except Exception as e:
+                            print(f"[WA] Pay send error: {e}")
+
+                    try:
+                        from app.services.analytics_service import save_payment
+                        save_payment(user_id, {"plan": plan_title, "amount": amount, "email": pay_email})
+                    except: pass
                     break
 
             except Exception as e:
