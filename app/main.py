@@ -9,7 +9,7 @@ load_dotenv()
 
 from app.graph import chat
 from app.qdrant_db import insert_data
-from app.services.redis_service import get_history, clear_history, get_all_users, r, get_session, save_message, save_session
+from app.services.redis_service import get_history, clear_history, get_all_users, r, get_session, save_message
 
 app = FastAPI(title="Limbu.ai Chatbot API", version="4.0.0")
 
@@ -67,26 +67,27 @@ async def webhook_connected(request: Request):
     """Auto-notify chatbot when user connects or fails to connect"""
     try:
         body = await request.json()
-        session_id = body.get("session_id", "")
+
         status = body.get("status", "success")
         email = body.get("email", "")
         message = body.get("message", "")
 
-        if not session_id:
-            raise HTTPException(status_code=400, detail="session_id required")
+
 
         from app.nodes.connect import handle_check_latest_connection, handle_connect_link
 
-        # Find user by session_id
-        session_keys = r.keys("session:*")
+        # Find user by phone
+        phone = body.get("phone", "")
         user_id = None
-        for key in session_keys:
-            key = key.decode() if isinstance(key, bytes) else key
-            uid = key.replace("session:", "")
-            sess = get_session(uid)
-            if sess.get("connect_session_id") == session_id:
-                user_id = uid
-                break
+        
+        if phone:
+            # WhatsApp user
+            wa_id = f"wa_{phone}"
+            sess = get_session(wa_id)
+            if sess:
+                user_id = wa_id
+        
+
 
         if not user_id:
             return {"status": "session not found"}
@@ -150,129 +151,82 @@ async def webhook_action_complete(request: Request):
     """Receive action completion from Limbu.ai dashboard"""
     try:
         body = await request.json()
-        session_id = body.get("session_id", "")
+        print(f"[Webhook Action] Received: {body}")
+        
+        phone = str(body.get("phone", "")).strip()
         action = body.get("action", "")
-        status = body.get("status", "")
+        status = body.get("status", "success")
         result = body.get("result", {})
 
-        if not session_id:
-            raise HTTPException(status_code=400, detail="session_id required")
+        if not phone:
+            return {"status": "error", "detail": "phone required"}
 
-        session_keys = r.keys("session:*")
-        user_id = None
-        for key in session_keys:
-            key = key.decode() if isinstance(key, bytes) else key
-            uid = key.replace("session:", "")
-            sess = get_session(uid)
-            if sess.get("connect_session_id") == session_id:
-                user_id = uid
-                break
+        # Find user_id by phone
+        user_id = f"wa_{phone}"
+        sess = get_session(user_id)
+        if not sess:
+            user_id = f"u_{phone}"
+            sess = get_session(user_id)
+        if not sess:
+            print(f"[Webhook Action] No user found for phone: {phone}")
+            return {"status": "user not found", "phone": phone}
 
-        if not user_id:
-            return {"status": "session not found"}
-
-        labels = {
-            "health_score": "Full Health Score Report",
+        # Build message based on action and result
+        action_labels = {
+            "health_score": "GMB Health Score Report",
             "magic_qr": "Magic QR Code",
             "website": "Optimized Website",
-            "insights": "Business Insights",
+            "insights": "GMB Insights",
+            "review_reply": "Review Reply Setup",
+            "keyword_planner": "Keyword Planner",
             "social_posts": "Social Media Posts"
         }
-        label = labels.get(action, action)
+        label = action_labels.get(action, action)
 
         if status == "success":
-            msg = "✅ **" + label + " ready hai!**\n\n"
-            if result.get("message"):
-                msg += str(result["message"]) + "\n"
-            if result.get("url"):
-                msg += "\n🔗 " + str(result["url"])
+            # Build rich message from result
+            text = result.get("text") or result.get("message") or ""
+            msg = f"✅ *{label} ready hai!*\n\n{text}"
+            
+            if result.get("pdf_url"):
+                msg += f"\n\n📄 PDF Report: {result['pdf_url']}"
             if result.get("qr_url"):
-                msg += "\n🔮 QR Code: " + str(result["qr_url"])
+                msg += f"\n\n🔮 QR Code: {result['qr_url']}"
             if result.get("website_url"):
-                msg += "\n🌐 Website: " + str(result["website_url"])
+                msg += f"\n\n🌐 Website: {result['website_url']}"
+            if result.get("data") and action == "health_score":
+                data = result["data"]
+                score = data.get("totalScore", "")
+                stat = data.get("status", "")
+                if score:
+                    msg += f"\n\n📊 Score: {score}/100 — {stat}"
+            if result.get("keywords"):
+                kw_list = result["keywords"]
+                if isinstance(kw_list, list):
+                    kw_text = "\n".join([f"  • {k.get('word',k)} — {k.get('volume','')}" for k in kw_list[:10]])
+                    msg += f"\n\n🔑 Keywords:\n{kw_text}"
         else:
-            msg = "❌ " + label + " mein problem aayi. Kripya 📞 9283344726 par call karein."
+            msg = f"❌ {label} mein problem aayi. Kripya 📞 9283344726 par call karein."
 
         save_message(user_id, "assistant", msg)
+
+        # Send via WhatsApp if user came from WhatsApp
+        if user_id.startswith("wa_"):
+            try:
+                from app.services.whatsapp_service import send_whatsapp
+                wa_phone = user_id.replace("wa_", "")
+                send_whatsapp(wa_phone, msg)
+                print(f"[Webhook Action] ✅ Sent to WhatsApp: {wa_phone}")
+            except Exception as wa_e:
+                print(f"[Webhook Action] WA send error: {wa_e}")
+
         return {"status": "ok", "user_id": user_id}
 
     except Exception as e:
         print(f"[Webhook Action] Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/webhook/whatsapp")
-async def webhook_whatsapp(request: Request):
-    """Receive WhatsApp messages and reply"""
-    try:
-        body = await request.json()
-        print(f"[WA Webhook] Received: {body}")
-
-        # Extract message details
-        event = body.get("event", "")
-        if event != "message.received":
-            return {"status": "ignored"}
-
-        contact = body.get("contact", {})
-        phone = str(contact.get("phone", ""))
-        message_data = body.get("message", {})
-        msg_type = message_data.get("type", "")
-        
-        # Only handle text messages
-        if msg_type != "text":
-            return {"status": "non-text ignored"}
-
-        user_message = message_data.get("content", "").strip()
-        if not user_message:
-            return {"status": "empty message"}
-
-        # Use phone as user_id
-        user_id = f"wa_{phone}"
-
-        print(f"[WA] From {phone}: {user_message}")
-
-        # Process through chatbot
-        response = chat(user_id, user_message)
-
-        # Send reply via WhatsApp API
-        from app.services.whatsapp_service import send_whatsapp
-        
-        # Split long messages (WhatsApp limit ~4096 chars)
-        if len(response) > 4000:
-            chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
-            for chunk in chunks:
-                send_whatsapp(phone, chunk)
-        else:
-            send_whatsapp(phone, response)
-
-        # Also check for auto-messages (polling notifications)
-        # These will be handled by polling thread automatically
-
-        return {"status": "ok"}
-
-    except Exception as e:
-        print(f"[WA Webhook] Error: {e}")
+        import traceback; traceback.print_exc()
         return {"status": "error", "detail": str(e)}
 
-
-@app.get("/api/admin/stats")
-def admin_stats():
-    from app.services.analytics_service import get_stats
-    return get_stats()
-
-@app.get("/api/admin/payments")
-def admin_payments():
-    from app.services.analytics_service import get_payments
-    return {"payments": get_payments()}
-
-@app.get("/api/admin/connections")
-def admin_connections():
-    from app.services.analytics_service import get_connected_businesses
-    return {"connections": get_connected_businesses()}
-
-@app.get("/api/admin/user-events/{user_id}")
-def admin_user_events(user_id: str):
-    from app.services.analytics_service import get_user_events
-    return {"events": get_user_events(user_id)}
 
 @app.get("/analytics", response_class=HTMLResponse)
 def analytics_dashboard():

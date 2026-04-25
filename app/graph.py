@@ -325,8 +325,7 @@ def node_show_plan(state: ChatState) -> ChatState:
         plan = get_plan_by_name(plan_name, cycle)
         if plan:
             session = get_session(user_id)
-            session_id = session.get("connect_session_id", "")
-            plan_msg = format_plan_message(plan, session_id, user_id)
+            plan_msg = format_plan_message(plan, "", user_id)
             reply = (
                 f"Yeh hai aapke liye best plan:\n\n"
                 f"{plan_msg}\n\n"
@@ -398,8 +397,6 @@ def node_dashboard_action(state: ChatState) -> ChatState:
     action = params.get("action", "")
     location_id = params.get("location_id", "")
     email = params.get("email", session.get("connected_email", ""))
-    session_id = session.get("connect_session_id", "")
-
     # Get location_id from session if not provided
     if not location_id and session.get("connected_businesses"):
         bizs = session["connected_businesses"]
@@ -434,7 +431,6 @@ def node_dashboard_action(state: ChatState) -> ChatState:
     def _trigger():
         from app.services.actions_service import trigger_action
         from app.services.redis_service import save_message as _save
-        # Use phone for WhatsApp users
         phone = user_id.replace("wa_", "") if user_id.startswith("wa_") else user_id.replace("u_", "")
         result = trigger_action(action, phone, location_id, email)
         if result.get("success"):
