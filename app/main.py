@@ -9,7 +9,7 @@ load_dotenv()
 
 from app.graph import chat
 from app.qdrant_db import insert_data
-from app.services.redis_service import get_history, clear_history, get_all_users, r, get_session, save_message
+from app.services.redis_service import get_history, clear_history, get_all_users, r, get_session, save_message, save_session
 
 app = FastAPI(title="Limbu.ai Chatbot API", version="4.0.0")
 
@@ -144,6 +144,63 @@ def get_history_endpoint(user_id: str):
 def delete_history(user_id: str):
     clear_history(user_id)
     return {"message": f"Cleared for {user_id}"}
+
+
+@app.post("/webhook/whatsapp")
+async def webhook_whatsapp(request: Request):
+    """Receive WhatsApp messages and reply"""
+    try:
+        body = await request.json()
+        print(f"[WA Webhook] Received: {body}")
+
+        event = body.get("event", "")
+        if event != "message.received":
+            return {"status": "ignored"}
+
+        contact = body.get("contact", {})
+        phone = str(contact.get("phone", ""))
+        contact_name = contact.get("name", "") or contact.get("pushname", "")
+        message_data = body.get("message", {})
+        msg_type = message_data.get("type", "text")
+
+        if msg_type != "text":
+            from app.services.whatsapp_service import send_whatsapp
+            send_whatsapp(phone, "Main abhi sirf text messages handle kar sakti hoon. Text mein likhein. 😊")
+            return {"status": "non-text"}
+
+        user_message = message_data.get("content", "").strip()
+        if not user_message:
+            return {"status": "empty"}
+
+        user_id = f"wa_{phone}"
+
+        # Save contact name
+        if contact_name:
+            sess = get_session(user_id)
+            if not sess.get("contact_name"):
+                sess["contact_name"] = contact_name
+                save_session(user_id, sess)
+
+        print(f"[WA] From {phone} ({contact_name}): {user_message}")
+
+        # Track
+        try:
+            from app.services.analytics_service import track_event
+            track_event(user_id, "whatsapp_message", {"phone": phone})
+        except: pass
+
+        # Process
+        response = chat(user_id, user_message)
+
+        # Send reply
+        from app.services.whatsapp_service import send_whatsapp
+        send_whatsapp(phone, response)
+
+        return {"status": "ok"}
+
+    except Exception as e:
+        print(f"[WA Webhook] Error: {e}")
+        return {"status": "error", "detail": str(e)}
 
 
 @app.post("/webhook/action-complete")
