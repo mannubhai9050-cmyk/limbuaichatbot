@@ -17,17 +17,16 @@ def handle_analyse(user_id: str, session: dict) -> str:
     analysis = extract_gmb_score(place)
     session["analysis"] = analysis
 
-    # Determine connect URL
+    # Always use phone — no session_id
     is_whatsapp = user_id.startswith("wa_")
     if is_whatsapp:
         phone = user_id.replace("wa_", "")
-        connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
-        poll_key = phone  # poll by phone
     else:
-        if not session.get("connect_session_id"):
-            session["connect_session_id"] = uuid.uuid4().hex[:16]
-        connect_url = f"{LIMBU_CONNECT_URL}?session_id={session['connect_session_id']}"
-        poll_key = session["connect_session_id"]
+        # Web users — use user_id as phone key
+        phone = user_id.replace("u_", "")
+    
+    connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
+    poll_key = phone
 
     session["connect_link_sent"] = True
     session["connect_verified"] = False
@@ -68,12 +67,11 @@ def handle_analyse(user_id: str, session: dict) -> str:
     return report
 
 
-def _call_api(poll_key: str, is_whatsapp: bool) -> dict:
+def _call_api(poll_key: str, is_whatsapp: bool = True) -> dict:
     try:
-        param = "phone" if is_whatsapp else "session_id"
         res = httpx.get(
             f"{LIMBU_API_BASE}/gmb/status",
-            params={param: poll_key},
+            params={"phone": poll_key},
             timeout=10
         )
         return res.json()

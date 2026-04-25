@@ -434,7 +434,9 @@ def node_dashboard_action(state: ChatState) -> ChatState:
     def _trigger():
         from app.services.actions_service import trigger_action
         from app.services.redis_service import save_message as _save
-        result = trigger_action(action, session_id, location_id, email)
+        # Use phone for WhatsApp users
+        phone = user_id.replace("wa_", "") if user_id.startswith("wa_") else user_id.replace("u_", "")
+        result = trigger_action(action, phone, location_id, email)
         if result.get("success"):
             msg = (
                 f"✅ **{action_label} ready hai!**\n\n"
