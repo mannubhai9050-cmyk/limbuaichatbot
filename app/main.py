@@ -49,44 +49,123 @@ def chat_endpoint(req: ChatRequest):
     return {"response": response, "user_id": user_id, "status": "ok"}
 
 
-@app.post("/webhook/chat")
-async def webhook_chat(request: Request):
-    """Main WhatsApp webhook endpoint"""
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-
+async def _process_chat(body: dict, headers) -> dict:
+    """Shared chat processing — builds user_id from phone if available"""
     message = body.get("message", "").strip()
-    user_id = (
-        body.get("user_id") or
-        request.headers.get("X-User-ID") or
-        str(uuid.uuid4())
-    )
-
     if not message:
-        raise HTTPException(status_code=400, detail="message required")
+        return {"error": "message required"}
 
-    # ── Save phone in session if sent in webhook body ──────────────
-    raw_phone = (
-        body.get("phone") or
-        body.get("from") or
-        body.get("sender") or
-        ""
-    )
+    raw_phone = body.get("phone") or body.get("from") or body.get("sender") or ""
+    phone_norm = ""
     if raw_phone:
-        phone = raw_phone.replace("+", "").replace(" ", "").replace("-", "")
-        if not phone.startswith("91") and len(phone) == 10:
-            phone = "91" + phone
-        # Save phone in session for feature actions
-        from app.services.redis_service import get_session, save_session
+        phone_norm = raw_phone.replace("+", "").replace(" ", "").replace("-", "")
+        if not phone_norm.startswith("91") and len(phone_norm) == 10:
+            phone_norm = "91" + phone_norm
+
+    if phone_norm:
+        user_id = f"wa_{phone_norm}"
+    else:
+        user_id = body.get("user_id") or headers.get("X-User-ID") or str(uuid.uuid4())
+
+    if phone_norm:
         sess = get_session(user_id)
         if not sess.get("connect_phone"):
-            sess["connect_phone"] = phone
+            sess["connect_phone"] = phone_norm
             save_session(user_id, sess)
 
     response = chat(user_id, message)
     return {"response": response, "user_id": user_id, "status": "ok"}
+
+
+@app.post("/webhook/chat")
+async def webhook_chat(request: Request):
+    """Main chat webhook"""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    result = await _process_chat(body, request.headers)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/webhook/whatsapp")
+async def webhook_whatsapp(request: Request):
+    """WhatsApp webhook — alias for /webhook/chat"""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    result = await _process_chat(body, request.headers)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/webhook/action-complete")
+async def webhook_action_complete(request: Request):
+    """
+    Called by Limbu.ai when a dashboard action completes.
+    Payload: { phone, action, status, result: { url, reviewUrl, pdf_url, text, ... } }
+    """
+    try:
+        body = await request.json()
+        print(f"[Webhook Action] Received: {body}")
+
+        phone = body.get("phone", "").replace("+", "").replace(" ", "")
+        action = body.get("action", "")
+        status = body.get("status", "")
+        result_data = body.get("result", {})
+
+        if not phone or not action:
+            return {"status": "error", "detail": "phone and action required"}
+
+        if not phone.startswith("91") and len(phone) == 10:
+            phone = "91" + phone
+
+        # Find user by phone — try multiple formats
+        user_id = None
+        for candidate in [f"wa_{phone}", f"wa_{phone[2:]}" if phone.startswith("91") else None]:
+            if candidate and get_session(candidate):
+                user_id = candidate
+                break
+
+        # Last resort: scan all sessions
+        if not user_id:
+            for key in r.keys("session:*"):
+                uid = key.replace("session:", "") if isinstance(key, str) else key.decode().replace("session:", "")
+                s = get_session(uid)
+                if s.get("connect_phone") == phone:
+                    user_id = uid
+                    break
+
+        if not user_id:
+            print(f"[Webhook Action] No user found for phone: {phone}")
+            return {"status": "user_not_found", "phone": phone}
+
+        if status != "success":
+            return {"status": "ok", "detail": "non-success status ignored"}
+
+        from app.services.actions_service import _build_message
+        from app.nodes.features import FEATURE_NEXT_OFFER
+        from app.services.whatsapp_service import send_whatsapp
+
+        msg = _build_message(action, result_data)
+        next_offer = FEATURE_NEXT_OFFER.get(action, "")
+        if next_offer:
+            msg = f"{msg}\n\n━━━━━━━━━━━━━━━━━━━━\n{next_offer}"
+
+        save_message(user_id, "assistant", msg)
+        send_whatsapp(phone, msg)
+
+        print(f"[Webhook Action] Delivered {action} to {user_id}")
+        return {"status": "ok", "user_id": user_id, "action": action}
+
+    except Exception as e:
+        print(f"[Webhook Action] Error: {e}")
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/webhook/connected")
