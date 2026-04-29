@@ -1,13 +1,15 @@
 import re
 import threading
 import time
-from typing import TypedDict, Optional, Any
+from typing import TypedDict
 from langgraph.graph import StateGraph, END
+
 from app.nodes.intent import detect_and_respond
 from app.nodes.search import handle_search, handle_next_result
 from app.nodes.analyse import handle_analyse
 from app.nodes.booking import handle_booking
 from app.nodes.connect import handle_connect_link, handle_check_latest_connection, handle_check_email
+from app.nodes.features import handle_feature, FEATURE_SEQUENCE
 from app.services.limbu_api import check_user_by_phone
 from app.services.redis_service import save_message, get_session, save_session
 from app.extractors.entity_extractor import extract_action_params, extract_email
@@ -17,20 +19,25 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 
 # ── Keywords ──────────────────────────────────────────────────────
-YES_WORDS = {"yes", "haan", "han", "ha", "haa", "confirmed", "confirm",
-             "bilkul", "theek", "correct", "right", "sahi", "ji haan",
-             "ji ha", "ji", "ok", "okay", "hnji", "haan ji", "sure", "yep", "yup"}
+YES_WORDS = {
+    "yes", "haan", "han", "ha", "haa", "confirmed", "confirm",
+    "bilkul", "theek", "correct", "right", "sahi", "ji haan",
+    "ji ha", "ji", "ok", "okay", "hnji", "haan ji", "sure", "yep", "yup",
+    "kar do", "kardo", "bhejo", "de do", "zaroor", "please"
+}
 
-NO_WORDS = {"no", "nahi", "nhi", "nahin", "nope", "not", "galat",
-            "wrong", "different", "doosra", "alag", "nhi hai"}
+NO_WORDS = {
+    "no", "nahi", "nhi", "nahin", "nope", "not", "galat",
+    "wrong", "different", "doosra", "alag", "nhi hai", "mat karo", "band karo"
+}
 
 CONNECTED_WORDS = {
     "connect kiya", "ho gaya", "connect ho gaya", "done", "kar liya",
     "connected", "link khola", "kiya", "hogaya", "connect kar liya",
-    "ho gayi", "verify karo", "check karo", "connect hua", "hua kya",
-    "ho gaya kya", "kya connect", "business connect", "ab hua",
-    "connect ho gya", "kr liya", "ho gya", "hua connect", "check kar",
-    "connected hai", "connect ho gaya hai"
+    "ho gayi", "verify karo", "check karo", "connect hua",
+    "ho gaya kya", "kya connect", "ab hua", "connect ho gya",
+    "kr liya", "ho gya", "hua connect", "check kar",
+    "connected hai", "connect ho gaya hai", "hua kya", "link click"
 }
 
 INDIAN_CITIES = [
@@ -44,7 +51,8 @@ INDIAN_CITIES = [
     "rohtak", "sonipat", "panipat", "ambala", "karnal", "hisar",
     "panchkula", "manesar", "bhiwadi", "allahabad", "prayagraj",
     "bhubaneswar", "srinagar", "jammu", "alwar", "bikaner", "udaipur",
-    "kota", "ajmer", "sikar", "bhilwara", "barmer", "jhunjhunu"
+    "kota", "ajmer", "sikar", "bhilwara", "barmer", "jhunjhunu",
+    "vadodara", "gandhinagar"
 ]
 
 
@@ -58,13 +66,13 @@ def is_no(text: str) -> bool:
     return any(w in t for w in NO_WORDS)
 
 
-def is_connected(text: str) -> bool:
+def is_connected_confirm(text: str) -> bool:
     t = text.lower().strip()
     return any(w in t for w in CONNECTED_WORDS)
 
 
 def _try_extract_business(message: str, session: dict):
-    """Detect business name + city in same message"""
+    """Auto-detect business name + city in same message"""
     if session.get("found_place") or session.get("search_places"):
         return None
     msg_lower = message.lower().strip()
@@ -75,17 +83,94 @@ def _try_extract_business(message: str, session: dict):
             break
     if not found_city:
         return None
-    import re as _re
-    business = message
-    business = _re.sub(r"(?i)" + found_city, "", business)
-    business = _re.sub(r"(?i)(mere|mera|meri|my|ka|ki|ke|business|shop|dhundho|check|batao|find|,|&)", "", business)
+    business = re.sub(r"(?i)" + found_city, "", message)
+    business = re.sub(
+        r"(?i)(mere|mera|meri|my|ka|ki|ke|business|shop|dhundho|check|batao|find|,|&|hai|ka naam)",
+        "", business
+    )
     business = business.strip(" ,.-&")
     if len(business) < 3:
         return None
     return f"[ACTION:SEARCH_BUSINESS]name={business}|city={found_city}[/ACTION]"
 
 
-# ── Background Polling ────────────────────────────────────────────
+# ── Connection Polling ─────────────────────────────────────────────
+def start_connection_polling(user_id: str, phone: str):
+    """Poll GMB status every 3s for max 5 min using phone number"""
+    def poll():
+        import httpx
+        from app.core.config import LIMBU_API_BASE
+        from app.nodes.connect import _build_connected_response
+
+        for attempt in range(100):  # 100 x 3s = 5 min
+            time.sleep(3)
+            try:
+                session = get_session(user_id)
+                if session.get("connect_verified"):
+                    print(f"[ConnPoll] Already verified, stopping for {user_id}")
+                    break
+                if session.get("connect_phone") != phone:
+                    print(f"[ConnPoll] Phone changed, stopping old poll for {user_id}")
+                    break
+
+                res = httpx.get(
+                    f"{LIMBU_API_BASE}/gmb/status",
+                    params={"phone": phone},
+                    timeout=10
+                )
+                data = res.json()
+                print(f"[ConnPoll] {user_id} attempt {attempt+1}: {data.get('status')}")
+
+                if data.get("status") == "success" or data.get("success"):
+                    email = data.get("email", "")
+                    locations = (
+                        data.get("locationsData") or
+                        data.get("businesses") or
+                        data.get("data") or []
+                    )
+                    session["connect_verified"] = True
+                    session["connected_email"] = email
+                    session["connected_businesses"] = locations
+                    save_session(user_id, session)
+
+                    reply = _build_connected_response(session, locations, email)
+                    save_message(user_id, "assistant", reply)
+                    print(f"[ConnPoll] Connected! user={user_id} email={email}")
+                    break
+
+            except Exception as e:
+                print(f"[ConnPoll] Error: {e}")
+                time.sleep(5)
+
+    t = threading.Thread(target=poll, daemon=True)
+    t.start()
+    print(f"[ConnPoll] Started for user={user_id} phone={phone}")
+
+
+# ── Detect language from message ───────────────────────────────────
+def _detect_lang(message: str) -> str:
+    """Detect if message is English or Hindi/mixed"""
+    msg = message.strip().lower()
+    # Common English-only words
+    english_signals = [
+        "yes", "no", "hello", "hi", "hey", "please", "thanks", "thank you",
+        "sure", "okay", "ok", "what", "how", "when", "where", "who", "why",
+        "send", "right", "correct", "wrong", "done", "connected", "good",
+        "great", "awesome", "nice", "help", "need", "want", "can", "i am",
+        "i'm", "my", "me", "we", "our", "the", "a ", "an ", "is ", "are ",
+        "do ", "did", "will", "shall", "would", "could", "should", "get",
+        "got", "find", "show", "check", "start", "stop", "more", "less"
+    ]
+    words = msg.split()
+    if not words:
+        return "hi"
+    eng_count = sum(1 for w in words if any(sig in w for sig in english_signals))
+    # If majority English words → English
+    if eng_count >= max(1, len(words) * 0.4):
+        return "en"
+    return "hi"
+
+
 # ── State ─────────────────────────────────────────────────────────
 class ChatState(TypedDict, total=False):
     user_id: str
@@ -93,8 +178,7 @@ class ChatState(TypedDict, total=False):
     raw_reply: str
     action: str
     response: str
-    booking_data: Any
-    search_data: Any
+    feature_type: str
 
 
 # ── Entry Node ────────────────────────────────────────────────────
@@ -102,60 +186,113 @@ def entry_node(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     message = state["message"]
     session = get_session(user_id)
+    msg_lower = message.lower().strip()
 
-    # Mark greeted
+    # ── Detect and save language ──────────────────────────────────
+    lang = _detect_lang(message)
+    if lang != session.get("lang"):
+        session["lang"] = lang
+        save_session(user_id, session)
+
+    # ── Mark greeted ──────────────────────────────────────────────
     if not session.get("greeted"):
         session["greeted"] = True
         save_session(user_id, session)
 
-    # Check connected words
-    if is_connected(message) and not session.get("connect_verified"):
-        state["raw_reply"] = "[ACTION:CHECK_LATEST_CONNECTION][/ACTION]"
-        state["action"] = "CHECK_LATEST_CONNECTION"
-        return state
+    # ── 1. Connected words check (only if link was sent, not yet verified)
+    if session.get("connect_link_sent") and not session.get("connect_verified"):
+        if is_connected_confirm(message):
+            state["action"] = "CHECK_LATEST_CONNECTION"
+            return state
 
-    # Handle confirmation after business shown
+    # ── 2. Business confirmation (yes/no after showing result)
     if session.get("found_place") and not session.get("confirmed"):
         if is_yes(message):
             session["confirmed"] = True
             save_session(user_id, session)
-            state["raw_reply"] = "__CONFIRMED__"
             state["action"] = "CONFIRMED"
             return state
         elif is_no(message):
-            state["raw_reply"] = "__NEXT__"
             state["action"] = "NEXT_RESULT"
             return state
 
-    # Handle analyse after confirmation
+    # ── 3. Analyse trigger
     if session.get("confirmed") and not session.get("analysis"):
-        analyse_words = ["analyse", "analysis", "check", "dekho", "batao",
-                         "report", "haan", "yes", "han", "ha", "ok", "sure",
-                         "kar do", "karein", "ji", "need", "chahiye", "do"]
-        if any(w in message.lower() for w in analyse_words):
-            state["raw_reply"] = "[ACTION:ANALYSE][/ACTION]"
+        analyse_triggers = [
+            "analyse", "analysis", "check", "dekho", "batao", "report",
+            "haan", "yes", "han", "ha", "ok", "sure", "kar do",
+            "karein", "ji", "need", "chahiye", "do", "nikalo", "dikhao"
+        ]
+        if any(w in msg_lower for w in analyse_triggers):
             state["action"] = "ANALYSE"
             return state
 
-    # Email detection after connect link sent
+    # ── 4. Connect — YES after analysis/report
+    if session.get("analysis") and not session.get("connect_link_sent"):
+        if is_yes(message):
+            state["action"] = "CONNECT_BUSINESS"
+            return state
+
+    # ── 5. Feature triggers (only after connected)
+    if session.get("connect_verified"):
+        feature_keywords = {
+            "health report": "health_score", "health score": "health_score", "health": "health_score",
+            "magic qr": "magic_qr", "qr code": "magic_qr", "qr": "magic_qr",
+            "insight": "insights", "performance": "insights",
+            "website": "website", "site": "website",
+            "review reply": "review_reply", "review": "review_reply"
+        }
+        if is_yes(message):
+            offered = session.get("features_offered", [])
+            for feat in FEATURE_SEQUENCE:
+                if feat not in offered:
+                    state["action"] = "FEATURE"
+                    state["feature_type"] = feat
+                    return state
+
+        for keyword, feat in feature_keywords.items():
+            if keyword in msg_lower:
+                state["action"] = "FEATURE"
+                state["feature_type"] = feat
+                return state
+
+    # ── 6. Email detection (after connect link sent)
     if session.get("connect_link_sent") and not session.get("connect_verified"):
         email = extract_email(message)
         if email:
-            state["raw_reply"] = f"[ACTION:CHECK_BUSINESS_EMAIL]email={email}[/ACTION]"
             state["action"] = "CHECK_BUSINESS_EMAIL"
+            state["raw_reply"] = f"[ACTION:CHECK_BUSINESS_EMAIL]email={email}[/ACTION]"
             return state
 
-    # Smart business+city detection
+    # ── 7. Smart business+city detection
     smart = _try_extract_business(message, session)
     if smart:
         state["raw_reply"] = smart
         state["action"] = "SEARCH_BUSINESS"
         return state
 
-    # Claude response
+    # ── 8. Claude handles everything (general Q&A, support, etc.)
     reply = detect_and_respond(user_id, message)
+
+    # If Claude returned an action tag, route to that node (NO double-save)
+    detected = _detect_action(reply)
+    if detected != "RESPOND":
+        state["action"] = detected
+        if detected == "FEATURE":
+            m = re.search(r'\[ACTION:FEATURE\]type=(\w+)\[/ACTION\]', reply)
+            if m:
+                state["feature_type"] = m.group(1)
+        elif detected == "CONNECT_BUSINESS":
+            pass  # node_connect_business will handle and save
+        elif detected == "SEARCH_BUSINESS":
+            state["raw_reply"] = reply
+        else:
+            state["raw_reply"] = reply
+        return state
+
+    # Pure text response — save via RESPOND node
     state["raw_reply"] = reply
-    state["action"] = _detect_action(reply)
+    state["action"] = "RESPOND"
     return state
 
 
@@ -163,8 +300,7 @@ def _detect_action(text: str) -> str:
     actions = [
         "SEARCH_BUSINESS", "NEXT_RESULT", "ANALYSE",
         "CONNECT_BUSINESS", "CHECK_LATEST_CONNECTION",
-        "CHECK_BUSINESS_EMAIL", "BOOK_DEMO", "CHECK_USER",
-        "SHOW_PLAN", "CHECK_PAYMENT", "DASHBOARD_ACTION"
+        "CHECK_BUSINESS_EMAIL", "FEATURE", "BOOK_DEMO", "CHECK_USER"
     ]
     for action in actions:
         if f"[ACTION:{action}]" in text:
@@ -174,10 +310,9 @@ def _detect_action(text: str) -> str:
 
 # ── Nodes ─────────────────────────────────────────────────────────
 def node_respond(state: ChatState) -> ChatState:
-    user_id = state["user_id"]
-    reply = state["raw_reply"]
-    save_message(user_id, "assistant", reply)
-    state["response"] = reply
+    """Save and return plain Claude text response"""
+    save_message(state["user_id"], "assistant", state["raw_reply"])
+    state["response"] = state["raw_reply"]
     return state
 
 
@@ -185,15 +320,14 @@ def node_confirmed(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
     place = session.get("found_place", {})
-    name = place.get("displayName", {}).get("text", "aapka business")
-    
-    # Match language based on last user message
-    msg = state.get("message", "").lower()
-    if any(w in msg for w in ["yes", "correct", "right"]):
-        reply = f"Great! ✅ **{name}** confirmed.\n\nShall I analyse your Google Business Profile and show improvement areas? 😊"
+    name = place.get("displayName", {}).get("text", "your business")
+    lang = session.get("lang", "hi")
+
+    if lang == "en":
+        reply = f"Great! ✅ *{name}* confirmed.\n\nShall I analyse your Google Business Profile? 😊"
     else:
-        reply = f"Bahut achha! ✅ **{name}** confirm ho gaya.\n\nKya main aapki Google Business Profile analyse karoon aur improvement ki scope bataaon? 😊"
-    
+        reply = f"Bahut achha! ✅ *{name}* confirm ho gaya.\n\nKya main aapki Google Business Profile analyse karoon? 😊"
+
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -202,12 +336,14 @@ def node_confirmed(state: ChatState) -> ChatState:
 def node_search_business(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
-    match = re.search(r'\[ACTION:SEARCH_BUSINESS\](.*?)\[/ACTION\]', state["raw_reply"], re.DOTALL)
+    raw = state.get("raw_reply", "")
+    match = re.search(r'\[ACTION:SEARCH_BUSINESS\](.*?)\[/ACTION\]', raw, re.DOTALL)
     if match:
         params = extract_action_params(match.group(1))
         reply = handle_search(user_id, session, params.get("name", ""), params.get("city", ""))
     else:
-        reply = "Kripya apna business naam aur city batayein. 😊"
+        lang = session.get("lang", "hi")
+        reply = "Please share your business name and city. 😊" if lang == "en" else "Kripya apna business naam aur city batayein. 😊"
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -232,10 +368,23 @@ def node_analyse(state: ChatState) -> ChatState:
 
 
 def node_connect_business(state: ChatState) -> ChatState:
+    """
+    Generate connect link and save ONCE.
+    node_respond is NOT called for this action — no double save.
+    """
     user_id = state["user_id"]
     session = get_session(user_id)
     reply = handle_connect_link(user_id, session)
-    # NOTE: Polling is handled by analyse.py — no duplicate polling here
+
+    # Start polling — phone saved in session by handle_connect_link
+    session = get_session(user_id)
+    phone = session.get("connect_phone", "")
+    if phone:
+        start_connection_polling(user_id, phone)
+    else:
+        print(f"[ConnectNode] No phone for {user_id} — polling not started")
+
+    # Save ONCE here — RESPOND node not called for this action
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -253,12 +402,37 @@ def node_check_latest_connection(state: ChatState) -> ChatState:
 def node_check_business_email(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
-    match = re.search(r'\[ACTION:CHECK_BUSINESS_EMAIL\](.*?)\[/ACTION\]', state["raw_reply"], re.DOTALL)
+    raw = state.get("raw_reply", "")
+    match = re.search(r'\[ACTION:CHECK_BUSINESS_EMAIL\](.*?)\[/ACTION\]', raw, re.DOTALL)
     if match:
         params = extract_action_params(match.group(1))
         reply = handle_check_email(user_id, session, params.get("email", ""))
     else:
-        reply = "Kripya apni registered email batayein. 😊"
+        reply = "Kripya apni registered Gmail email batayein. 😊"
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
+    return state
+
+
+def node_feature(state: ChatState) -> ChatState:
+    user_id = state["user_id"]
+    session = get_session(user_id)
+    feature_type = state.get("feature_type", "")
+
+    if not feature_type:
+        raw = state.get("raw_reply", "")
+        m = re.search(r'\[ACTION:FEATURE\]type=(\w+)\[/ACTION\]', raw)
+        if m:
+            feature_type = m.group(1)
+
+    lang = session.get("lang", "hi")
+    if not feature_type:
+        reply = "Which feature would you like? Health Report, Magic QR, Insights, Website, or Review Reply? 😊" \
+            if lang == "en" else \
+            "Kaunsa feature chahiye? Health Report, Magic QR, Insights, Website, ya Review Reply? 😊"
+    else:
+        reply = handle_feature(user_id, session, feature_type)
+
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -278,7 +452,11 @@ def node_book_demo(state: ChatState) -> ChatState:
             time=params.get("time", "")
         )
     else:
-        reply = "Kripya naam, phone number, aur convenient date/time batayein. 😊"
+        session = get_session(user_id)
+        lang = session.get("lang", "hi")
+        reply = "Please share your name, phone number, and preferred date/time. 😊" \
+            if lang == "en" else \
+            "Kripya naam, phone number, aur date/time batayein. 😊"
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -287,171 +465,29 @@ def node_book_demo(state: ChatState) -> ChatState:
 def node_check_user(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
-    match = re.search(r'\[ACTION:CHECK_USER\](.*?)\[/ACTION\]', state["raw_reply"], re.DOTALL)
+    raw = state.get("raw_reply", "")
+    match = re.search(r'\[ACTION:CHECK_USER\](.*?)\[/ACTION\]', raw, re.DOTALL)
     if match:
         params = extract_action_params(match.group(1))
         phone = params.get("phone", "")
         user_data = check_user_by_phone(phone)
+        lang = session.get("lang", "hi")
         if user_data:
             session["user_info"] = user_data
             save_session(user_id, session)
             status = user_data.get("subscription", {}).get("status", "inactive")
-            ctx = f"User found — plan: {status}. Continue naturally in user's language."
+            ctx = f"User found — plan: {status}. Continue naturally in {'English' if lang=='en' else 'Hindi'}."
         else:
-            ctx = "New user. Continue demo booking in user's language."
+            ctx = f"New user. Continue demo booking in {'English' if lang=='en' else 'Hindi'}."
         follow_up = llm.invoke([
             SystemMessage(content=get_main_prompt(session)),
             HumanMessage(content=f"[SYSTEM: {ctx}]")
         ])
         reply = follow_up.content.strip()
     else:
-        reply = "Kripya phone number batayein. 😊"
+        reply = "Please share your phone number. 😊"
     save_message(user_id, "assistant", reply)
     state["response"] = reply
-    return state
-
-
-def node_show_plan(state: ChatState) -> ChatState:
-    """Show plan details with payment link"""
-    user_id = state["user_id"]
-    raw = state.get("raw_reply", "")
-    import re as _re
-    match = _re.search(r'\[ACTION:SHOW_PLAN\](.*?)\[/ACTION\]', raw, re.DOTALL)
-    if match:
-        params = extract_action_params(match.group(1))
-        plan_name = params.get("plan", "Professional Plan")
-        cycle = params.get("cycle", "monthly")
-        from app.services.plans_service import get_plan_by_name, format_plan_message
-        plan = get_plan_by_name(plan_name, cycle)
-        if plan:
-            session = get_session(user_id)
-            plan_msg = format_plan_message(plan, "", user_id)
-            reply = (
-                f"Yeh hai aapke liye best plan:\n\n"
-                f"{plan_msg}\n\n"
-                f"Payment link pe click karke directly subscribe kar sakte hain. "
-                f"Koi sawaal ho toh batayein! 😊"
-            )
-        else:
-            reply = f"Plan details fetch karne mein problem aayi. Kripya 📞 9283344726 par call karein."
-    else:
-        reply = "Kaunsa plan dekhna chahte hain? Basic, Professional, ya Premium? 😊"
-    save_message(user_id, "assistant", reply)
-    state["response"] = reply
-    return state
-
-
-def node_check_payment(state: ChatState) -> ChatState:
-    """Check payment status"""
-    user_id = state["user_id"]
-    session = get_session(user_id)
-    email = session.get("connected_email", "")
-
-    if email:
-        import httpx
-        from app.core.config import LIMBU_API_BASE
-        try:
-            with httpx.Client(timeout=10) as client:
-                res = client.get(
-                    f"{LIMBU_API_BASE}/users",
-                    params={"email": "info@limbu.ai", "search": email}
-                )
-                data = res.json()
-                if data.get("success") and data.get("users"):
-                    user_data = data["users"][0]
-                    sub = user_data.get("subscription", {})
-                    status = sub.get("status", "")
-                    plan_name = sub.get("planName", "")
-                    if status == "active":
-                        reply = "🎉 **Payment confirmed!**\n\n" + f"✅ **{plan_name}** active ho gaya hai.\n\n" + "Hamari team aapke GMB profile par kaam shuru kar degi.\nInvoice aapki email par bhej diya jayega.\n\nShukriya aapka! 🙏"
-                    else:
-                        reply = "Abhi payment confirm nahi mili. 🤔\n\nThodi der mein update ho jayega.\nYa call karein: 📞 9283344726"
-                else:
-                    reply = "Payment status check karne mein problem aayi. Kripya 📞 9283344726 par call karein."
-        except Exception as e:
-            reply = "Technical problem aayi. Kripya 📞 9283344726 par call karein."
-    else:
-        reply = "Kripya apni registered email batayein taaki payment verify kar sakein."
-
-    save_message(user_id, "assistant", reply)
-    state["response"] = reply
-    return state
-
-
-def node_dashboard_action(state: ChatState) -> ChatState:
-    """Trigger Limbu.ai dashboard action"""
-    user_id = state["user_id"]
-    session = get_session(user_id)
-    raw = state.get("raw_reply", "")
-
-    import re as _re
-    match = _re.search(r'\[ACTION:DASHBOARD_ACTION\](.*?)\[/ACTION\]', raw, re.DOTALL)
-
-    if not match:
-        reply = "Kripya batayein — Health Score, Magic QR, Website, ya Insights mein se kya chahiye? 😊"
-        save_message(user_id, "assistant", reply)
-        state["response"] = reply
-        return state
-
-    params = extract_action_params(match.group(1))
-    action = params.get("action", "")
-    location_id = params.get("location_id", "")
-    email = params.get("email", session.get("connected_email", ""))
-    # Get location_id from session if not provided
-    if not location_id and session.get("connected_businesses"):
-        bizs = session["connected_businesses"]
-        if bizs:
-            location_id = bizs[0].get("locationResourceName", "")
-
-    action_labels = {
-        "health_score": "Full Health Score Report",
-        "magic_qr": "Magic QR Code",
-        "website": "Optimized Website",
-        "insights": "Business Insights",
-        "social_posts": "Social Media Posts"
-    }
-    action_label = action_labels.get(action, action)
-
-    # Show processing message
-    reply = f"⏳ **{action_label}** generate ho raha hai...\n\nThodi der mein ready ho jayega. Main aapko notify kar doongi! 😊"
-    save_message(user_id, "assistant", reply)
-    state["response"] = reply
-
-    # Save action in session
-    session["pending_action"] = {
-        "action": action,
-        "location_id": location_id,
-        "email": email,
-        "label": action_label
-    }
-    save_session(user_id, session)
-
-    # Trigger action API in background
-    import threading
-    def _trigger():
-        from app.services.actions_service import trigger_action
-        from app.services.redis_service import save_message as _save
-        phone = user_id.replace("wa_", "") if user_id.startswith("wa_") else user_id.replace("u_", "")
-        result = trigger_action(action, phone, location_id, email)
-        if result.get("success"):
-            msg = (
-                f"✅ **{action_label} ready hai!**\n\n"
-                f"{result.get('message', '')}\n"
-            )
-            if result.get("url"):
-                msg += f"\n🔗 {result['url']}"
-            if result.get("qr_url"):
-                msg += f"\n🔮 QR Code: {result['qr_url']}"
-        else:
-            msg = (
-                f"⏳ **{action_label}** process ho raha hai.\n\n"
-                f"Ready hone pe aapko notify kiya jayega. "
-                f"Ya check karein: 📞 9283344726"
-            )
-        _save(user_id, "assistant", msg)
-        print(f"[Action] {action} complete for {user_id}")
-
-    threading.Thread(target=_trigger, daemon=True).start()
     return state
 
 
@@ -473,11 +509,9 @@ def build_graph():
     graph.add_node("connect_business", node_connect_business)
     graph.add_node("check_latest_connection", node_check_latest_connection)
     graph.add_node("check_business_email", node_check_business_email)
+    graph.add_node("feature", node_feature)
     graph.add_node("book_demo", node_book_demo)
     graph.add_node("check_user", node_check_user)
-    graph.add_node("show_plan", node_show_plan)
-    graph.add_node("check_payment", node_check_payment)
-    graph.add_node("dashboard_action", node_dashboard_action)
 
     graph.set_entry_point("entry")
     graph.add_conditional_edges("entry", router, {
@@ -489,17 +523,16 @@ def build_graph():
         "CONNECT_BUSINESS": "connect_business",
         "CHECK_LATEST_CONNECTION": "check_latest_connection",
         "CHECK_BUSINESS_EMAIL": "check_business_email",
+        "FEATURE": "feature",
         "BOOK_DEMO": "book_demo",
         "CHECK_USER": "check_user",
-        "SHOW_PLAN": "show_plan",
-        "CHECK_PAYMENT": "check_payment",
-        "DASHBOARD_ACTION": "dashboard_action",
     })
 
-    for node in ["respond", "confirmed", "search_business", "next_result",
-                 "analyse", "connect_business", "check_latest_connection",
-                 "check_business_email", "book_demo", "check_user",
-                 "show_plan", "check_payment", "dashboard_action"]:
+    for node in [
+        "respond", "confirmed", "search_business", "next_result",
+        "analyse", "connect_business", "check_latest_connection",
+        "check_business_email", "feature", "book_demo", "check_user"
+    ]:
         graph.add_edge(node, END)
 
     return graph.compile()
@@ -511,4 +544,7 @@ app_graph = build_graph()
 def chat(user_id: str, message: str) -> str:
     save_message(user_id, "user", message)
     result = app_graph.invoke({"user_id": user_id, "message": message})
-    return result.get("response", "Kshama karein, kuch problem aayi. Dobara try karein ya 📞 9283344726 par call karein.")
+    return result.get(
+        "response",
+        "Sorry, something went wrong. Please try again or call 📞 9283344726."
+    )

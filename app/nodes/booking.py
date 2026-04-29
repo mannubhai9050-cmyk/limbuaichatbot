@@ -7,14 +7,13 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 
 def handle_booking(user_id: str, name: str, phone: str, date: str, time: str) -> str:
-
     if not is_future_datetime(date, time):
         session = get_session(user_id)
         reply = llm.invoke([
             SystemMessage(content=get_main_prompt(session)),
             HumanMessage(content=(
-                f"[SYSTEM: Selected time is in the past. Respectfully inform user "
-                f"and suggest a future date/time. Reply in user's language.]"
+                "[SYSTEM: Selected date/time is in the past. "
+                "Politely inform and ask for a future slot. Reply in user's language.]"
             ))
         ])
         return reply.content.strip()
@@ -27,15 +26,11 @@ def handle_booking(user_id: str, name: str, phone: str, date: str, time: str) ->
         reply = llm.invoke([
             SystemMessage(content=get_main_prompt(session)),
             HumanMessage(content=(
-                f"[SYSTEM: Demo booked successfully. Write a warm confirmation message "
-                f"in user's language. IMPORTANT: Keep these details EXACTLY in English as shown:\n\n"
+                f"[SYSTEM: Demo booked! Write warm confirmation. "
+                f"Keep these details EXACTLY as-is (don't translate):\n\n"
                 f"✅ Demo Confirmed!\n\n"
-                f"• Name: {name}\n"
-                f"• Date: {date}\n"
-                f"• Time: {time}\n"
-                f"• Phone: {phone}\n\n"
-                f"Add a warm closing line in user's language saying our team will call them. "
-                f"Do NOT translate the above details — keep them exactly as is.]"
+                f"• Name: {name}\n• Date: {date}\n• Time: {time}\n• Phone: {phone}\n\n"
+                f"Add warm closing in user's language.]"
             ))
         ])
         return reply.content.strip()
@@ -43,9 +38,8 @@ def handle_booking(user_id: str, name: str, phone: str, date: str, time: str) ->
         reply = llm.invoke([
             SystemMessage(content=get_main_prompt(session)),
             HumanMessage(content=(
-                f"[SYSTEM: Booking failed due to technical error. "
-                f"Apologize respectfully and ask to call 9283344726. "
-                f"Reply in user's language.]"
+                "[SYSTEM: Booking failed due to technical error. "
+                "Apologize and ask to call 9283344726. Reply in user's language.]"
             ))
         ])
         return reply.content.strip()

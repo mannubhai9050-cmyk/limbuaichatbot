@@ -1,7 +1,6 @@
 import httpx
 from app.core.config import GOOGLE_API_KEY
 
-
 FIELD_MASK = (
     "places.displayName,places.formattedAddress,"
     "places.googleMapsUri,places.rating,"
@@ -12,7 +11,7 @@ FIELD_MASK = (
 
 
 def search_places(name: str, city: str, page_size: int = 5) -> list:
-    """Search business on Google Places API"""
+    """Search business on Google Places API v1"""
     try:
         with httpx.Client(timeout=10) as client:
             res = client.post(
@@ -29,15 +28,3 @@ def search_places(name: str, city: str, page_size: int = 5) -> list:
     except Exception as e:
         print(f"[GooglePlaces] Error: {e}")
         return []
-
-
-def format_place_summary(place: dict) -> dict:
-    """Extract key fields from a place result"""
-    return {
-        "name": place.get("displayName", {}).get("text", ""),
-        "address": place.get("formattedAddress", ""),
-        "maps_url": place.get("googleMapsUri", ""),
-        "rating": place.get("rating", "N/A"),
-        "reviews": place.get("userRatingCount", 0),
-        "status": place.get("businessStatus", ""),
-    }

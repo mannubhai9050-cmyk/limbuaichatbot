@@ -1,12 +1,12 @@
 import httpx
 from app.core.config import PLANS_API_URL
 
-# Cache plans in memory
+# In-memory cache — resets on server restart
 _plans_cache = None
 
 
 def get_plans() -> dict:
-    """Fetch plans from Limbu.ai API with caching"""
+    """Fetch plans from Limbu.ai API with in-memory caching"""
     global _plans_cache
     if _plans_cache:
         return _plans_cache
@@ -14,16 +14,18 @@ def get_plans() -> dict:
         with httpx.Client(timeout=10) as client:
             res = client.get(PLANS_API_URL)
             data = res.json()
-            billing = data.get("data", {}).get("billingCycles") or data.get("billingCycles", [])
+            billing = (
+                data.get("data", {}).get("billingCycles")
+                or data.get("billingCycles", [])
+            )
             _plans_cache = _build_plans_map(billing)
             return _plans_cache
     except Exception as e:
-        print(f"[Plans] Error: {e}")
+        print(f"[Plans] API error: {e}")
         return _get_default_plans()
 
 
 def _build_plans_map(billing_cycles: list) -> dict:
-    """Build easy lookup map: {cycle: {plan_title: plan_data}}"""
     result = {}
     for cycle_data in billing_cycles:
         cycle = cycle_data.get("cycle", "monthly")
@@ -49,7 +51,6 @@ def _build_plans_map(billing_cycles: list) -> dict:
 
 
 def get_plan_by_name(plan_name: str, cycle: str = "monthly") -> dict | None:
-    """Get specific plan details"""
     plans = get_plans()
     cycle_plans = plans.get(cycle, plans.get("monthly", {}))
     plan_lower = plan_name.lower()
@@ -59,47 +60,32 @@ def get_plan_by_name(plan_name: str, cycle: str = "monthly") -> dict | None:
     return None
 
 
-def format_plan_message(plan: dict, session_id: str = "", user_id: str = "") -> str:
-    """Format plan details as chat message with session_id or phone in payment link"""
+def format_plan_message(plan: dict, user_id: str = "") -> str:
     features = "\n".join([f"  ✅ {f}" for f in plan.get("features", [])])
-    save_text = f"\n💰 **Aap bachayenge: ₹{plan['save']}**" if plan.get("save") else ""
+    save_text = f"\n💰 *Aap bachayenge: ₹{plan['save']}*" if plan.get("save") else ""
     discount_text = f" ({plan['discount']}% off)" if plan.get("discount") else ""
 
-    # Add phone or session_id to payment link
     payment_link = plan.get("paymentLink", "")
-    if payment_link:
-        if user_id and user_id.startswith("wa_"):
-            phone = user_id.replace("wa_", "")
+    if payment_link and user_id:
+        # Always use phone number in payment link
+        phone = user_id.replace("wa_", "")
+        if phone:
             sep = "&" if "?" in payment_link else "?"
             payment_link = f"{payment_link}{sep}phone={phone}"
-        elif session_id:
-            sep = "&" if "?" in payment_link else "?"
-            payment_link = f"{payment_link}{sep}session_id={session_id}"
 
     return (
-        f"**{plan['title']}** — {plan['label']}{discount_text}\n\n"
+        f"*{plan['title']}* — {plan['label']}{discount_text}\n\n"
         f"💵 Base Price: ₹{plan['basePrice']}\n"
         f"📊 GST (18%): ₹{plan['gst']}\n"
-        f"💳 **Total: ₹{plan['totalAmount']}**{save_text}\n\n"
-        f"📋 **Features:**\n{features}\n\n"
+        f"💳 *Total: ₹{plan['totalAmount']}*{save_text}\n\n"
+        f"📋 *Features:*\n{features}\n\n"
         f"📝 Posts: {plan['posts']} | Citations: {plan['citations']}\n\n"
-        f"🔗 **Payment Link:**\n{payment_link}"
+        f"🔗 *Payment Link:*\n{payment_link}"
     )
 
 
-def get_all_cycles_for_plan(plan_name: str) -> list:
-    """Get all billing cycles for a plan"""
-    plans = get_plans()
-    result = []
-    for cycle, cycle_plans in plans.items():
-        for key, plan in cycle_plans.items():
-            if plan_name.lower() in key:
-                result.append(plan)
-    return result
-
-
 def _get_default_plans() -> dict:
-    """Fallback if API fails"""
+    """Fallback if API unavailable"""
     return {
         "monthly": {
             "basic plan": {
@@ -107,21 +93,21 @@ def _get_default_plans() -> dict:
                 "totalAmount": 2950, "posts": 15, "citations": 5,
                 "paymentLink": "https://www.limbu.ai/checkout?planKey=subscription-basic",
                 "cycle": "monthly", "label": "Monthly", "save": 0, "discount": 0,
-                "features": ["Review Reply System", "Magic QR Code Generation", "Insights Dashboard"]
+                "features": ["Review Reply System", "Magic QR Code", "Insights Dashboard"]
             },
             "professional plan": {
                 "title": "Professional Plan", "basePrice": 5500, "gst": 990,
                 "totalAmount": 6490, "posts": 30, "citations": 12,
                 "paymentLink": "https://www.limbu.ai/checkout?planKey=subscription-professional",
                 "cycle": "monthly", "label": "Monthly", "save": 0, "discount": 0,
-                "features": ["Review Reply Management", "Magic QR Code Generation", "Insights Dashboard"]
+                "features": ["Review Reply Management", "Magic QR Code", "Insights Dashboard"]
             },
             "premium plan": {
                 "title": "Premium Plan", "basePrice": 7500, "gst": 1350,
                 "totalAmount": 8850, "posts": 45, "citations": 15,
                 "paymentLink": "https://www.limbu.ai/checkout?planKey=subscription-premium",
                 "cycle": "monthly", "label": "Monthly", "save": 0, "discount": 0,
-                "features": ["Review Reply Management", "Magic QR Code Generation", "Insights Dashboard", "Add Professional Services"]
+                "features": ["Review Reply Management", "Magic QR Code", "Insights Dashboard", "Advanced Automation"]
             }
         }
     }

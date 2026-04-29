@@ -19,26 +19,12 @@ def extract_phone(text: str) -> str | None:
 
 
 def extract_email(text: str) -> str | None:
-    """Extract email address"""
     match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
     return match.group() if match else None
 
 
-def extract_name(text: str) -> str | None:
-    """Basic name extraction — looks for capitalized words after name indicators"""
-    patterns = [
-        r'(?:mera naam|my name is|main hoon|i am|naam hai)\s+([A-Za-z\s]{2,30})',
-        r'(?:name:|naam:)\s*([A-Za-z\s]{2,30})',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-    return None
-
-
 def extract_action_params(text: str) -> dict:
-    """Parse key=value|key=value format from action tags"""
+    """Parse key=value|key=value format"""
     params = {}
     for part in text.strip().split("|"):
         if "=" in part:

@@ -1,8 +1,5 @@
 def extract_gmb_score(place: dict) -> dict:
-    """
-    Analyse Google Business Profile completeness.
-    Returns score, issues, strengths.
-    """
+    """Calculate GMB profile completeness score from Google Places data"""
     issues = []
     strengths = []
     score = 0
@@ -13,63 +10,66 @@ def extract_gmb_score(place: dict) -> dict:
 
     # Rating (20 pts)
     if rating >= 4.0:
-        strengths.append(f"Good rating ({rating}/5)")
+        strengths.append(f"Acha rating ({rating}/5)")
         score += 20
     elif rating > 0:
-        issues.append(f"Rating needs improvement ({rating}/5) — encourage positive reviews")
+        issues.append(f"Rating improve karni hai ({rating}/5) — positive reviews collect karo")
         score += 5
     else:
-        issues.append("No rating yet — start collecting reviews immediately")
+        issues.append("Koi rating nahi — Magic QR se reviews lao")
 
     # Reviews (20 pts)
     if reviews >= 50:
-        strengths.append(f"Strong review count ({reviews} reviews)")
+        strengths.append(f"Bahut reviews hain ({reviews})")
         score += 20
     elif reviews > 0:
-        issues.append(f"Low review count ({reviews}) — target minimum 50 reviews")
+        issues.append(f"Kam reviews ({reviews}) — minimum 50 target karo")
         score += 10
     else:
-        issues.append("No reviews — use Magic QR to collect reviews")
+        issues.append("Koi review nahi — Magic QR se shuru karo")
 
     # Photos (20 pts)
     if photos >= 10:
-        strengths.append(f"Good photo gallery ({photos} photos)")
+        strengths.append(f"Achi photos hain ({photos})")
         score += 20
     elif photos > 0:
-        issues.append(f"Insufficient photos ({photos}) — add 10+ quality images")
+        issues.append(f"Kam photos ({photos}) — 10+ quality images add karo")
         score += 10
     else:
-        issues.append("No photos — add business photos to improve click-through rate")
+        issues.append("Koi photo nahi — business photos add karo")
 
     # Website (15 pts)
     if place.get("websiteUri"):
-        strengths.append("Website linked to profile")
+        strengths.append("Website linked hai")
         score += 15
     else:
-        issues.append("No website linked — reduces credibility and SEO ranking")
+        issues.append("Website nahi linked — credibility aur SEO weak hai")
 
     # Phone (10 pts)
     if place.get("nationalPhoneNumber"):
-        strengths.append("Phone number available")
+        strengths.append("Phone number available hai")
         score += 10
     else:
-        issues.append("Phone number missing — customers cannot contact directly")
+        issues.append("Phone number missing — customers contact nahi kar sakte")
 
     # Hours (15 pts)
     if place.get("regularOpeningHours"):
-        strengths.append("Business hours are set")
+        strengths.append("Business hours set hain")
         score += 15
     else:
-        issues.append("Business hours not set — customers don't know when you're open")
+        issues.append("Business hours set nahi — customers ko pata nahi kab open ho")
 
-    # Grade
     score = min(score, 100)
+
     if score >= 80:
-        grade, color, plan = "Excellent", "🟢", "Premium Plan (₹7,500/month) — Advanced automation to stay ahead"
+        grade, color = "Excellent", "🟢"
+        plan = "Premium Plan (₹7,500/month) — Advanced automation"
     elif score >= 55:
-        grade, color, plan = "Good", "🟡", "Professional Plan (₹5,500/month) — Review management, insights, 30 GMB posts"
+        grade, color = "Good", "🟡"
+        plan = "Professional Plan (₹5,500/month) — Review management, insights, 30 GMB posts"
     else:
-        grade, color, plan = "Needs Improvement", "🔴", "Basic Plan (₹2,500/month) — GMB posts, Magic QR, citations"
+        grade, color = "Needs Improvement", "🔴"
+        plan = "Basic Plan (₹2,500/month) — GMB posts, Magic QR, citations"
 
     return {
         "score": score,
