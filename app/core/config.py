@@ -9,7 +9,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # ── WhatsApp ──────────────────────────────────────────────────────
-WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "")
+WHATSAPP_API_URL = "https://whatsapp-one-blond.vercel.app/api/external/send"
 WHATSAPP_API_KEY = os.getenv("WHATSAPP_API_KEY", "")
 
 # ── Limbu.ai API ──────────────────────────────────────────────────

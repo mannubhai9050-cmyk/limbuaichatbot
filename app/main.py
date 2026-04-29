@@ -49,34 +49,76 @@ def chat_endpoint(req: ChatRequest):
     return {"response": response, "user_id": user_id, "status": "ok"}
 
 
-async def _process_chat(body: dict, headers) -> dict:
-    """Shared chat processing — builds user_id from phone if available"""
-    message = body.get("message", "").strip()
-    if not message:
-        return {"error": "message required"}
+def _parse_field(val):
+    """Parse value — works whether it's already a dict or a stringified dict"""
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        import ast as _ast, json as _json
+        for parser in [_ast.literal_eval, _json.loads]:
+            try:
+                r = parser(val)
+                if isinstance(r, dict):
+                    return r
+            except Exception:
+                pass
+    return {}
 
-    raw_phone = body.get("phone") or body.get("from") or body.get("sender") or ""
+
+async def _process_chat(body: dict, headers) -> dict:
+    """
+    Parse WhatsApp webhook. Exact format:
+    {
+      event, workspace_id,
+      contact: { id, phone },
+      message: { wamid, type, content, timestamp }
+    }
+    contact/message may be dict OR stringified dict string.
+    """
+    print(f"[Webhook] Incoming: {str(body)[:200]}")
+
+    # ── contact → phone ───────────────────────────────────────────
+    contact = _parse_field(body.get("contact") or {})
+    phone_raw = (
+        contact.get("phone") or contact.get("wa_id") or
+        body.get("phone") or body.get("from") or
+        body.get("sender") or body.get("waId") or ""
+    )
     phone_norm = ""
-    if raw_phone:
-        phone_norm = raw_phone.replace("+", "").replace(" ", "").replace("-", "")
+    if phone_raw:
+        phone_norm = str(phone_raw).replace("+", "").replace(" ", "").replace("-", "")
         if not phone_norm.startswith("91") and len(phone_norm) == 10:
             phone_norm = "91" + phone_norm
 
+    # ── message → text (content field is the actual text) ─────────
+    msg = _parse_field(body.get("message") or {})
+    message = str(
+        msg.get("content") or msg.get("text") or
+        msg.get("body") or msg.get("caption") or
+        body.get("content") or body.get("text") or
+        body.get("body") or ""
+    ).strip()
+
+    if not message:
+        print(f"[Webhook] No text — msg={msg} body_keys={list(body.keys())}")
+        return {"error": "message required"}
+
+    # ── user_id from phone ────────────────────────────────────────
     if phone_norm:
         user_id = f"wa_{phone_norm}"
     else:
-        user_id = body.get("user_id") or headers.get("X-User-ID") or str(uuid.uuid4())
+        user_id = body.get("user_id") or str(headers.get("X-User-ID", "")) or str(uuid.uuid4())
 
+    # Save phone in session
     if phone_norm:
         sess = get_session(user_id)
         if not sess.get("connect_phone"):
             sess["connect_phone"] = phone_norm
             save_session(user_id, sess)
 
+    print(f"[Webhook] OK user={user_id} phone={phone_norm} msg={message[:60]}")
     response = chat(user_id, message)
     return {"response": response, "user_id": user_id, "status": "ok"}
-
-
 @app.post("/webhook/chat")
 async def webhook_chat(request: Request):
     """Main chat webhook"""
