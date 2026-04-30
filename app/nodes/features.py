@@ -66,27 +66,43 @@ def handle_feature(user_id: str, session: dict, feature_type: str) -> str:
 
     result = trigger_action(feature_type, phone, location_id, email, user_id)
 
+    lang = session.get("lang", "hi")
+    en = (lang == "en")
+
     if result.get("success"):
-        # ONLY brief ack — polling thread sends real result separately
-        return f"✅ *{label}* process ho rahi hai... thodi der mein result aayega! 😊"
+        if en:
+            return f"\u2705 *{label}* is being processed... I'll send the result shortly! \U0001f60a"
+        return f"\u2705 *{label}* process ho rahi hai... thodi der mein result aayega! \U0001f60a"
     else:
         error_msg = result.get("message", "")
         next_offer = FEATURE_NEXT_OFFER.get(feature_type, "")
+        if en:
+            return (
+                f"*{label}* ran into a small issue. \U0001f615\n"
+                f"{f'({error_msg})' if error_msg else ''}\n\n"
+                f"Please call: \U0001f4de 9283344726\n\n"
+                f"{next_offer}"
+            )
         return (
-            f"*{label}* mein thodi problem aayi. 😕\n"
+            f"*{label}* mein thodi problem aayi. \U0001f615\n"
             f"{f'({error_msg})' if error_msg else ''}\n\n"
-            f"Kripya call karein: 📞 9283344726\n\n"
+            f"Kripya call karein: \U0001f4de 9283344726\n\n"
             f"{next_offer}"
         )
 
 
 def _get_location_id(session: dict) -> str:
-    """Get GMB location ID from session"""
+    """Get GMB location ID — only the CID number, no extra URL params"""
+    import re as _re
     confirmed_place = session.get("found_place", {})
     if confirmed_place:
         maps_uri = confirmed_place.get("googleMapsUri", "")
         if "cid=" in maps_uri:
-            return maps_uri.split("cid=")[-1]
+            # Extract ONLY the numeric CID — stop at & or end
+            cid_part = maps_uri.split("cid=")[-1]
+            cid = _re.match(r"(\d+)", cid_part)
+            if cid:
+                return cid.group(1)
         loc_id = confirmed_place.get("name", "") or confirmed_place.get("id", "")
         if loc_id:
             return loc_id

@@ -135,6 +135,9 @@ def start_connection_polling(user_id: str, phone: str):
 
                     reply = _build_connected_response(session, locations, email)
                     save_message(user_id, "assistant", reply)
+                    # Send WhatsApp notification
+                    from app.services.whatsapp_service import send_whatsapp
+                    send_whatsapp(phone, reply)
                     print(f"[ConnPoll] Connected! user={user_id} email={email}")
                     break
 
@@ -169,6 +172,24 @@ def _detect_lang(message: str) -> str:
     if eng_count >= max(1, len(words) * 0.4):
         return "en"
     return "hi"
+
+
+# ── Message dedup — prevent same wamid being processed twice ─────
+_processed_ids: set = set()
+_MAX_PROCESSED = 500
+
+def _is_duplicate(msg_id: str) -> bool:
+    """Return True if this message was already processed"""
+    global _processed_ids
+    if not msg_id:
+        return False
+    if msg_id in _processed_ids:
+        return True
+    _processed_ids.add(msg_id)
+    if len(_processed_ids) > _MAX_PROCESSED:
+        # Keep last 250
+        _processed_ids = set(list(_processed_ids)[-250:])
+    return False
 
 
 # ── State ─────────────────────────────────────────────────────────

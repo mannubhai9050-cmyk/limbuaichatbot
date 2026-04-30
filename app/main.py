@@ -77,6 +77,14 @@ async def _process_chat(body: dict, headers) -> dict:
     """
     print(f"[Webhook] Incoming: {str(body)[:200]}")
 
+    # ── Dedup by wamid — prevent double processing ────────────────
+    from app.graph import _is_duplicate
+    msg_obj_raw = _parse_field(body.get("message") or {})
+    wamid = msg_obj_raw.get("wamid", "")
+    if wamid and _is_duplicate(wamid):
+        print(f"[Webhook] Duplicate wamid={wamid[:30]}, skipping")
+        return {"status": "duplicate", "skipped": True}
+
     # ── contact → phone ───────────────────────────────────────────
     contact = _parse_field(body.get("contact") or {})
     phone_raw = (
@@ -118,6 +126,13 @@ async def _process_chat(body: dict, headers) -> dict:
 
     print(f"[Webhook] OK user={user_id} phone={phone_norm} msg={message[:60]}")
     response = chat(user_id, message)
+
+    # ── Send reply via WhatsApp ───────────────────────────────────
+    if phone_norm and response:
+        from app.services.whatsapp_service import send_whatsapp
+        sent = send_whatsapp(phone_norm, response)
+        print(f"[Webhook] WA send to {phone_norm}: {'OK' if sent else 'FAILED'}")
+
     return {"response": response, "user_id": user_id, "status": "ok"}
 @app.post("/webhook/chat")
 async def webhook_chat(request: Request):
