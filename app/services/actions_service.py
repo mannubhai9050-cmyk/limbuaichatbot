@@ -105,12 +105,19 @@ def _deliver(user_id: str, phone: str, action: str, result: dict):
     try:
         from app.services.redis_service import save_message
         from app.services.whatsapp_service import send_whatsapp
+        from app.services.redis_service import get_session
         from app.nodes.features import FEATURE_NEXT_OFFER
 
         msg = _build_message(action, result)
 
-        # Append next feature offer
-        next_offer = FEATURE_NEXT_OFFER.get(action, "")
+        # Append next feature offer — language aware
+        sess = get_session(user_id)
+        lang = sess.get("lang", "hi") if sess else "hi"
+        next_offer_map = FEATURE_NEXT_OFFER.get(action, {})
+        if isinstance(next_offer_map, dict):
+            next_offer = next_offer_map.get(lang, next_offer_map.get("hi", ""))
+        else:
+            next_offer = next_offer_map
         if next_offer:
             msg = f"{msg}\n\n━━━━━━━━━━━━━━━━━━━━\n{next_offer}"
 

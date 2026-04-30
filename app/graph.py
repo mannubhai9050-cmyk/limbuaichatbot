@@ -11,11 +11,12 @@ from app.nodes.booking import handle_booking
 from app.nodes.connect import handle_connect_link, handle_check_latest_connection, handle_check_email
 from app.nodes.features import handle_feature, FEATURE_SEQUENCE
 from app.services.limbu_api import check_user_by_phone
-from app.services.redis_service import save_message, get_session, save_session
+from app.services.redis_service import save_message, get_session, save_session, get_history
 from app.extractors.entity_extractor import extract_action_params, extract_email
 from app.core.llm import llm
 from app.core.prompts import get_main_prompt
 from langchain_core.messages import SystemMessage, HumanMessage
+
 
 
 # ── Keywords ──────────────────────────────────────────────────────
@@ -292,7 +293,19 @@ def entry_node(state: ChatState) -> ChatState:
         state["action"] = "SEARCH_BUSINESS"
         return state
 
-    # ── 8. Claude handles everything (general Q&A, support, etc.)
+    # ── 8. Fast path: first greeting → instant reply, no LLM ────
+    msg_count = len(get_history(user_id))
+    if msg_count <= 2 and msg_lower in {
+        "hi", "hello", "hey", "hlo", "helo", "hii", "hiii",
+        "namaste", "namasthe", "hy", "helloo", "start", "helo"
+    }:
+        from app.nodes.intent import FIRST_MSG_EN, FIRST_MSG_HI
+        lang = session.get("lang", "hi")
+        state["raw_reply"] = FIRST_MSG_EN if lang == "en" else FIRST_MSG_HI
+        state["action"] = "RESPOND"
+        return state
+
+    # ── 9. Claude handles everything (general Q&A, support, etc.)
     reply = detect_and_respond(user_id, message)
 
     # If Claude returned an action tag, route to that node (NO double-save)
