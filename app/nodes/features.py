@@ -60,8 +60,8 @@ def handle_feature(user_id: str, session: dict, feature_type: str) -> str:
         label = FEATURE_LABELS.get(feature_type, feature_type)
         return f"Please call: 📞 9283344726" if en else f"Kripya call karein: 📞 9283344726"
 
-    # ── Get locationResourceName from connected businesses ─────────
-    location_id = _get_location_resource_name(session)
+    # ── Get locationResourceName — prefer active (switched) business ─
+    location_id = session.get("active_location_id") or _get_location_resource_name(session)
 
     # Track features offered
     offered = session.get("features_offered", [])

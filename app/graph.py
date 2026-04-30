@@ -18,7 +18,6 @@ from app.core.prompts import get_main_prompt
 from langchain_core.messages import SystemMessage, HumanMessage
 
 
-
 # ── Keywords ──────────────────────────────────────────────────────
 YES_WORDS = {
     "yes", "haan", "han", "ha", "haa", "confirmed", "confirm",
@@ -193,6 +192,37 @@ def _is_duplicate(msg_id: str) -> bool:
     return False
 
 
+def _try_switch_business(msg_lower: str, businesses: list, session: dict, user_id: str) -> bool:
+    """
+    Detect if user is asking for a different business.
+    Returns True if business was switched.
+    """
+    if not businesses:
+        return False
+    # Check if message contains any business name/title
+    for b in businesses:
+        title = b.get("title", "").lower().strip()
+        if not title or len(title) < 4:
+            continue
+        # Match full title or significant words
+        title_words = [w for w in title.split() if len(w) > 3]
+        if title in msg_lower or any(w in msg_lower for w in title_words):
+            # Found a business match — switch active business
+            current = session.get("active_business_name", "")
+            if current.lower() != title:
+                session["active_business_name"] = b.get("title", "")
+                session["active_location_id"] = (
+                    b.get("locationResourceName") or
+                    b.get("locationId") or
+                    b.get("id") or ""
+                )
+                session["features_offered"] = []  # Reset for new business
+                save_session(user_id, session)
+                print(f"[Graph] Business switched to: {b['title']} → {session['active_location_id']}")
+                return True
+    return False
+
+
 # ── State ─────────────────────────────────────────────────────────
 class ChatState(TypedDict, total=False):
     user_id: str
@@ -264,6 +294,21 @@ def entry_node(state: ChatState) -> ChatState:
             "website": "website", "site": "website",
             "review reply": "review_reply", "review": "review_reply"
         }
+
+        # ── Business switch: user names a different business ───────
+        businesses = session.get("connected_businesses", [])
+        switched = _try_switch_business(msg_lower, businesses, session, user_id)
+        if switched:
+            state["action"] = "RESPOND"
+            lang = session.get("lang", "hi")
+            biz_name = session.get("active_business_name", "")
+            if lang == "en":
+                ack = f"Got it! Switching to *{biz_name}*. 😊\n\nWhich feature would you like?"
+            else:
+                ack = f"Theek hai! *{biz_name}* select kar liya. 😊\n\nIs business ke liye kaunsa feature chahiye?"
+            state["raw_reply"] = ack
+            return state
+
         if is_yes(message):
             offered = session.get("features_offered", [])
             for feat in FEATURE_SEQUENCE:

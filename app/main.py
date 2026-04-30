@@ -204,17 +204,9 @@ async def webhook_action_complete(request: Request):
         if status != "success":
             return {"status": "ok", "detail": "non-success status ignored"}
 
-        from app.services.actions_service import _build_message
-        from app.nodes.features import FEATURE_NEXT_OFFER
-        from app.services.whatsapp_service import send_whatsapp
-
-        msg = _build_message(action, result_data)
-        next_offer = FEATURE_NEXT_OFFER.get(action, "")
-        if next_offer:
-            msg = f"{msg}\n\n━━━━━━━━━━━━━━━━━━━━\n{next_offer}"
-
-        save_message(user_id, "assistant", msg)
-        send_whatsapp(phone, msg)
+        from app.services.actions_service import deliver_from_webhook
+        action_id = body.get("actionId", "")
+        deliver_from_webhook(user_id, phone, action, result_data, action_id)
 
         print(f"[Webhook Action] Delivered {action} to {user_id}")
         return {"status": "ok", "user_id": user_id, "action": action}
