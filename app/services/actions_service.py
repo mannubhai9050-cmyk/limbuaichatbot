@@ -3,28 +3,46 @@ import threading
 import time
 from app.core.config import CHATBOT_ACTION_API, CHATBOT_ACTION_RESULT_API
 
-# Track delivered action IDs to prevent duplicate delivery
-_delivered: set = set()
+# ── Dedup: track delivered by user+action — prevent ANY duplicate ─
+# Key: "user_id:action" — only ONE delivery per action per user per trigger
+_delivered: dict = {}  # {dedup_key: timestamp}
+_delivered_lock = threading.Lock()
+
+
+def _mark_delivered(user_id: str, action: str) -> bool:
+    """Returns True if this is the FIRST delivery (not duplicate). Thread-safe."""
+    key = f"{user_id}:{action}"
+    now = time.time()
+    with _delivered_lock:
+        last = _delivered.get(key, 0)
+        # Allow re-delivery only after 60 seconds (new trigger)
+        if now - last < 60:
+            print(f"[Dedup] Blocked duplicate delivery: {key}")
+            return False
+        _delivered[key] = now
+        # Cleanup old entries
+        if len(_delivered) > 500:
+            old_keys = [k for k, v in _delivered.items() if now - v > 300]
+            for k in old_keys:
+                del _delivered[k]
+        return True
 
 
 def trigger_action(action: str, phone: str, location_id: str, email: str, user_id: str) -> dict:
-    """POST to Limbu dashboard to trigger an action, then start polling."""
+    """POST to Limbu dashboard to trigger action, then poll for result."""
     try:
         with httpx.Client(timeout=30) as client:
-            payload = {
-                "action": action,
-                "phone": phone,
-                "locationId": location_id,
-                "email": email
-            }
+            payload = {"action": action, "phone": phone, "locationId": location_id, "email": email}
             print(f"[Action] Triggering '{action}' phone={phone} locationId={location_id}")
             res = client.post(CHATBOT_ACTION_API, json=payload)
             data = res.json()
-            print(f"[Action] Response {res.status_code}: success={data.get('success')} msg={data.get('message','')[:60]}")
-
+            print(f"[Action] Response {res.status_code}: success={data.get('success')} msg={data.get('message','')[:80]}")
             if data.get("success"):
+                # Reset dedup timer so new trigger can deliver
+                key = f"{user_id}:{action}"
+                with _delivered_lock:
+                    _delivered.pop(key, None)
                 _start_poll(phone, action, user_id)
-
             return data
     except Exception as e:
         print(f"[Action] Trigger error: {e}")
@@ -38,15 +56,12 @@ def _start_poll(phone: str, action: str, user_id: str):
 
 
 def _poll_loop(phone: str, action: str, user_id: str):
-    """Poll every 5s, max 3 min. Dedup by actionId."""
+    """Poll every 5s, max 3 min."""
     for attempt in range(36):
         time.sleep(5)
         try:
             with httpx.Client(timeout=15) as client:
-                res = client.get(
-                    CHATBOT_ACTION_RESULT_API,
-                    params={"phone": phone, "action": action}
-                )
+                res = client.get(CHATBOT_ACTION_RESULT_API, params={"phone": phone, "action": action})
                 print(f"[Poll] {action} attempt {attempt+1}: HTTP {res.status_code}")
                 if res.status_code != 200:
                     continue
@@ -56,39 +71,25 @@ def _poll_loop(phone: str, action: str, user_id: str):
                 result = data.get("result", {})
                 if not result:
                     continue
-
-                # Dedup by actionId
-                action_id = data.get("actionId", "")
-                dedup_key = f"{user_id}:{action}:{action_id}"
-                if dedup_key in _delivered:
-                    print(f"[Poll] Already delivered {dedup_key}, skipping")
-                    return
-                _delivered.add(dedup_key)
-                if len(_delivered) > 1000:
-                    _delivered.clear()
-
-                _deliver(user_id, phone, action, result, action_id)
+                # Try to deliver — dedup check inside
+                if _mark_delivered(user_id, action):
+                    _deliver(user_id, phone, action, result)
                 return
-
         except Exception as e:
             print(f"[Poll] Error attempt {attempt+1}: {e}")
             time.sleep(3)
-
     print(f"[Poll] Timeout: action={action} user={user_id}")
 
 
 def deliver_from_webhook(user_id: str, phone: str, action: str, result: dict, action_id: str = ""):
-    """Called from webhook/action-complete — checks dedup before delivering."""
-    dedup_key = f"{user_id}:{action}:{action_id}"
-    if action_id and dedup_key in _delivered:
-        print(f"[Webhook Action] Already delivered {dedup_key}, skipping")
-        return
-    if action_id:
-        _delivered.add(action_id)
-    _deliver(user_id, phone, action, result, action_id)
+    """Called from webhook/action-complete — dedup protected."""
+    if _mark_delivered(user_id, action):
+        _deliver(user_id, phone, action, result)
+    else:
+        print(f"[Webhook Action] Duplicate blocked for {user_id}:{action}")
 
 
-def _deliver(user_id: str, phone: str, action: str, result: dict, action_id: str = ""):
+def _deliver(user_id: str, phone: str, action: str, result: dict):
     """Build message and deliver to Redis + WhatsApp."""
     try:
         from app.services.redis_service import save_message, get_session
@@ -101,11 +102,7 @@ def _deliver(user_id: str, phone: str, action: str, result: dict, action_id: str
         sess = get_session(user_id)
         lang = sess.get("lang", "hi") if sess else "hi"
         next_offer_map = FEATURE_NEXT_OFFER.get(action, {})
-        if isinstance(next_offer_map, dict):
-            next_offer = next_offer_map.get(lang, next_offer_map.get("hi", ""))
-        else:
-            next_offer = str(next_offer_map)
-
+        next_offer = next_offer_map.get(lang, next_offer_map.get("hi", "")) if isinstance(next_offer_map, dict) else str(next_offer_map)
         if next_offer:
             msg = f"{msg}\n\n━━━━━━━━━━━━━━━━━━━━\n{next_offer}"
 
@@ -115,7 +112,6 @@ def _deliver(user_id: str, phone: str, action: str, result: dict, action_id: str
         if phone:
             wa_phone = phone if phone.startswith("91") else "91" + phone
             send_whatsapp(wa_phone, msg)
-            print(f"[Poll] ✅ WhatsApp sent to {wa_phone}")
 
     except Exception as e:
         print(f"[Poll] Deliver error: {e}")
@@ -123,17 +119,13 @@ def _deliver(user_id: str, phone: str, action: str, result: dict, action_id: str
 
 
 def _build_message(action: str, result: dict) -> str:
-    """Use pre-formatted 'text' from API, then append extra URLs."""
     api_text = result.get("text", "").strip()
 
     if action == "health_score":
-        msg = api_text if api_text else f"✅ *GMB Health Report ready hai!*"
-        # Clean up null services
+        msg = api_text if api_text else "✅ *GMB Health Report ready hai!*"
         if "null" in msg:
-            import re
-            msg = re.sub(r'(?:null(?:,\s*)?)+\+?\d*\s*more', '', msg)
-            msg = re.sub(r'\*Services:\*\s*\n', '', msg)
-            msg = msg.strip()
+            import re as _re
+            msg = _re.sub(r'\*Services:\*.*?(?=\n\n|\Z)', '', msg, flags=_re.DOTALL).strip()
         pdf = result.get("pdf_url", "")
         if pdf and pdf not in msg:
             msg += f"\n\n📄 *Full PDF Report:*\n{pdf}"
@@ -155,10 +147,7 @@ def _build_message(action: str, result: dict) -> str:
 
     elif action == "website":
         url = result.get("url", "") or result.get("website_url", "")
-        if api_text:
-            msg = api_text
-        else:
-            msg = f"✅ *Aapki Free Website ready hai!*"
+        msg = api_text if api_text else "✅ *Aapki Free Website ready hai!*"
         if url and url not in msg:
             msg += f"\n\n🌐 *Website URL:*\n{url}"
 
