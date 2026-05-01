@@ -46,6 +46,22 @@ CONNECTED_WORDS = {
     "ho gaya kya", "ab hua", "connect ho gya", "ho gya",
     "connected hai", "connect ho gaya hai", "hua kya", "link click"
 }
+# Already connected signals
+ALREADY_CONNECTED_WORDS = {
+    "already connected", "pehle se connected", "already connect",
+    "connected kar rakha", "connect kar rakha", "plan bhi", "plan le rakha",
+    "pehle connect", "connected hai", "already ho gaya", "bhai connected",
+    "mera connected", "kar liya connect", "already link", "connected hun"
+}
+
+# Wrong business / correction signals  
+WRONG_BUSINESS_WORDS = {
+    "galat hai", "galat he", "yeh mera nahi", "ye mera nahi",
+    "wrong", "nahi hai yeh", "different", "doosra", "alag",
+    "sahi nahi", "correct nahi", "yeh nahi", "ye nahi hai",
+    "hamara nahi", "mera nahi", "iska nahi"
+}
+
 INDIAN_CITIES = [
     "delhi", "mumbai", "bangalore", "bengaluru", "hyderabad", "chennai",
     "kolkata", "pune", "ahmedabad", "jaipur", "surat", "lucknow",
@@ -79,12 +95,36 @@ _HINDI_WORDS = {
 
 
 def is_yes(text: str) -> bool:
+    """
+    Strict yes detection — only clear short affirmatives.
+    Long sentences (>6 words) with unrelated content are NOT yes.
+    Uses exact word boundaries to avoid false matches like 'hai' in YES_WORDS.
+    """
     t = text.lower().strip()
-    return any(w in t for w in YES_WORDS) and not is_no(t)
+    words = t.split()
+
+    # Long sentences are almost never a simple yes
+    if len(words) > 6:
+        return False
+
+    # Exact match against yes words (word boundary check)
+    import re as _re
+    for w in YES_WORDS:
+        # Use word boundary matching
+        if _re.search(r'(?<![a-z])' + _re.escape(w) + r'(?![a-z])', t):
+            return True
+
+    return False
+
 
 def is_no(text: str) -> bool:
     t = text.lower().strip()
-    return any(w in t for w in NO_WORDS)
+    words = t.split()
+    import re as _re
+    for w in NO_WORDS:
+        if _re.search(r'(?<![a-z])' + _re.escape(w) + r'(?![a-z])', t):
+            return True
+    return False
 
 def is_connected_confirm(text: str) -> bool:
     t = text.lower().strip()
@@ -284,6 +324,52 @@ def entry_node(state: ChatState) -> ChatState:
         state["action"] = "RESPOND"
         return state
 
+    # ── PRIORITY: Already connected — user says business is connected ──
+    if not session.get("connect_verified"):
+        if any(w in msg_lower for w in ALREADY_CONNECTED_WORDS):
+            # User says they are already connected — verify via API
+            state["action"] = "CHECK_LATEST_CONNECTION"
+            return state
+
+    # ── PRIORITY: Wrong business — user says shown result is wrong ─────
+    if session.get("found_place") and not session.get("confirmed"):
+        if any(w in msg_lower for w in WRONG_BUSINESS_WORDS):
+            # Reset search so user can provide correct name
+            session.pop("found_place", None)
+            session.pop("search_places", None)
+            session.pop("result_index", None)
+            session.pop("confirmed", None)
+            session.pop("business_name", None)
+            session.pop("city", None)
+            save_session(user_id, session)
+            lang = session.get("lang", "hi")
+            if lang == "en":
+                reply = "I apologize for that! 😊 Please share the correct *business name* and *city* so I can find it."
+            else:
+                reply = "Sorry 😊 Kripya sahi *business naam* aur *city* batayein taaki main dhundh sakoon."
+            state["raw_reply"] = reply
+            state["action"] = "RESPOND"
+            return state
+
+    # Also handle correction when user mentions their actual location/shop
+    if session.get("confirmed") and not session.get("analysis"):
+        correction_signals = ["hamara shop", "mera shop", "hamare yahan", "our shop", "my shop",
+                              "actually", "actually mera", "nahi woh", "alag hai"]
+        if any(w in msg_lower for w in correction_signals):
+            # User is correcting — reset and let Claude handle with search
+            session.pop("found_place", None)
+            session.pop("search_places", None)
+            session.pop("confirmed", None)
+            session.pop("analysis", None)
+            session.pop("business_name", None)
+            session.pop("city", None)
+            save_session(user_id, session)
+            # Let Claude handle with fresh context
+            reply = detect_and_respond(user_id, message)
+            state["raw_reply"] = reply
+            state["action"] = _detect_action(reply) if "[ACTION:" in reply else "RESPOND"
+            return state
+
     # ── 1. Connected words (link sent, not verified) ──────────────
     if session.get("connect_link_sent") and not session.get("connect_verified"):
         if is_connected_confirm(message):
@@ -300,6 +386,8 @@ def entry_node(state: ChatState) -> ChatState:
         elif is_no(message):
             state["action"] = "NEXT_RESULT"
             return state
+        # Else: user said something unrelated → let Claude handle it
+        # (don't auto-confirm or auto-deny)
 
     # ── 3. Analyse ────────────────────────────────────────────────
     if session.get("confirmed") and not session.get("analysis"):
@@ -546,13 +634,29 @@ def node_feature(state: ChatState) -> ChatState:
 
 def node_book_demo(state: ChatState) -> ChatState:
     user_id = state["user_id"]
-    match = re.search(r'\[ACTION:BOOK_DEMO\](.*?)\[/ACTION\]', state.get("raw_reply", ""), re.DOTALL)
+    raw = state.get("raw_reply", "")
+    match = re.search(r'\[ACTION:BOOK_DEMO\](.*?)\[/ACTION\]', raw, re.DOTALL)
     if match:
         params = extract_action_params(match.group(1))
-        reply = handle_booking(user_id, name=params.get("name",""), phone=params.get("phone",""),
-                               date=params.get("date",""), time=params.get("time",""))
+        print(f"[Demo] Booking: {params}")
+        # If phone missing, try to get from session/user_id
+        phone = params.get("phone", "")
+        if not phone and user_id.startswith("wa_"):
+            phone = user_id.replace("wa_", "")
+            if phone.startswith("91"):
+                phone = phone[2:]
+        reply = handle_booking(
+            user_id,
+            name=params.get("name", ""),
+            phone=phone,
+            date=params.get("date", ""),
+            time=params.get("time", "")
+        )
     else:
-        reply = "Kripya naam, phone number, aur date/time batayein. 😊"
+        print(f"[Demo] No BOOK_DEMO tag found in: {raw[:100]}")
+        session = get_session(user_id)
+        lang = session.get("lang", "hi")
+        reply = "Please share your name, phone number, and preferred date/time. 😊" if lang == "en" else                 "Kripya naam, phone number, aur date/time batayein. 😊"
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -632,5 +736,5 @@ def chat(user_id: str, message: str) -> str:
         result = app_graph.invoke({"user_id": user_id, "message": message})
         return result.get(
             "response",
-            "Sorry, something went wrong. Please try again or call 📞 +91 9289344726."
+            "Sorry, something went wrong. Please try again or call 📞 9283344726."
         )
