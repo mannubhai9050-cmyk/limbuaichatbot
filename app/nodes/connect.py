@@ -49,13 +49,13 @@ def handle_connect_link(user_id: str, session: dict) -> str:
                 f"Please use this link to connect your Google Business Profile:\n\n"
                 f"🔗 {LIMBU_CONNECT_URL}\n\n"
                 f"Open the link and sign in with your Gmail.\n"
-                f"Or call us: 📞 9283344726"
+                f"Or call us: 📞 +91 9289344726"
             )
         return (
             f"Is link se connect karein:\n\n"
             f"🔗 {LIMBU_CONNECT_URL}\n\n"
             f"Link khol kar Gmail se login karein.\n"
-            f"Ya call karein: 📞 9283344726"
+            f"Ya call karein: 📞 +91 9289344726"
         )
 
     connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
@@ -91,7 +91,7 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
             data = res.json()
     except Exception as e:
         print(f"[Connect] Error: {e}")
-        return "Technical problem aayi. Kripya 📞 9283344726 par call karein."
+        return "Technical problem aayi. Kripya 📞 +91 9289344726 par call karein."
 
     if data.get("status") == "success" or data.get("success"):
         locations = (
@@ -112,7 +112,7 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
             f"Kripya is link se dobara try karein:\n"
             f"🔗 {connect_url}\n\n"
             f"Gmail se login karke 'Allow' click karein.\n"
-            f"Ya call karein: 📞 9283344726"
+            f"Ya call karein: 📞 +91 9289344726"
         )
 
 
@@ -123,7 +123,7 @@ def _build_connected_response(session: dict, locations: list, email: str) -> str
             f"🎉 *Badhaai ho! Account connect ho gaya!*\n\n"
             f"Lekin *{email}* se koi GMB profile linked nahi mili.\n\n"
             f"Ho sakta hai business kisi aur Gmail se registered ho.\n"
-            f"Sahi Gmail se dobara try karein ya call karein: 📞 9283344726"
+            f"Sahi Gmail se dobara try karein ya call karein: 📞 +91 9289344726"
         )
 
     biz_lines = []
@@ -160,7 +160,7 @@ def _build_connected_response(session: dict, locations: list, email: str) -> str
             f"🎉 *Badhaai ho! Account connect ho gaya!*\n\n"
             f"Lekin *{email}* se koi GMB profile linked nahi mili.\n\n"
             f"Ho sakta hai business kisi aur Gmail se registered ho.\n"
-            f"Sahi Gmail se dobara try karein ya call karein: 📞 9283344726"
+            f"Sahi Gmail se dobara try karein ya call karein: 📞 +91 9289344726"
         )
 
     biz_lines = []

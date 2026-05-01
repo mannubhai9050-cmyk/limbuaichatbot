@@ -632,5 +632,5 @@ def chat(user_id: str, message: str) -> str:
         result = app_graph.invoke({"user_id": user_id, "message": message})
         return result.get(
             "response",
-            "Sorry, something went wrong. Please try again or call 📞 9283344726."
+            "Sorry, something went wrong. Please try again or call 📞 +91 9289344726."
         )
