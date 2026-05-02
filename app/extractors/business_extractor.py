@@ -1,84 +1,151 @@
 def extract_gmb_score(place: dict) -> dict:
-    """Calculate GMB profile completeness score from Google Places data"""
-    issues = []
-    strengths = []
+    """
+    Calculate preview GMB score from Google Places API data.
+    Returns data in Grexa-compatible format for WhatsApp report.
+
+    Note: Google Places has LIMITED data.
+    Full accurate score comes from Limbu's health_score action after connecting.
+    """
     score = 0
+    data = {}
 
-    rating = place.get("rating", 0)
-    reviews = place.get("userRatingCount", 0)
+    rating = place.get("rating", 0) or 0
+    reviews = place.get("userRatingCount", 0) or 0
     photos = len(place.get("photos", []))
+    has_website = bool(place.get("websiteUri"))
+    has_phone = bool(place.get("nationalPhoneNumber"))
+    has_hours = bool(place.get("regularOpeningHours"))
+    has_address = bool(place.get("formattedAddress"))
+    business_status = place.get("businessStatus", "OPERATIONAL")
 
-    # Rating (20 pts)
-    if rating >= 4.0:
-        strengths.append(f"Acha rating ({rating}/5)")
-        score += 20
-    elif rating > 0:
-        issues.append(f"Rating improve karni hai ({rating}/5) — positive reviews collect karo")
-        score += 5
+    # ── Profile Completion (from Places data) ─────────────────────
+    total_fields = 6  # name, phone, website, hours, address, category
+    filled = sum([
+        True,          # name always present
+        has_phone,
+        has_website,
+        has_hours,
+        has_address,
+        bool(place.get("types")),
+    ])
+    profile_pct = round((filled / total_fields) * 100)
+    missing_fields = []
+    if not has_phone:
+        missing_fields.append("Phone Number")
+    if not has_website:
+        missing_fields.append("Website")
+    if not has_hours:
+        missing_fields.append("Business Hours")
+
+    data["profile_completion"] = profile_pct
+    data["profile_status"] = "Good" if profile_pct >= 90 else ("Average" if profile_pct >= 70 else "Poor")
+    data["missing_fields"] = missing_fields
+
+    # Profile score (20 pts)
+    score += round(profile_pct * 0.20)
+
+    # ── Review Score ──────────────────────────────────────────────
+    data["rating"] = rating
+    data["reviews"] = reviews
+
+    # Review rate (approximate from total reviews — Places doesn't give dates)
+    # Assume business listed ~1 year avg, estimate weekly rate
+    estimated_weeks = 52  # 1 year
+    review_rate = round(reviews / estimated_weeks, 1) if reviews else 0
+    data["review_rate"] = review_rate
+
+    # Review volume score (15 pts)
+    if reviews >= 100:
+        rev_vol_score = 15
+    elif reviews >= 50:
+        rev_vol_score = 10
+    elif reviews >= 25:
+        rev_vol_score = 6
+    elif reviews >= 10:
+        rev_vol_score = 3
     else:
-        issues.append("Koi rating nahi — Magic QR se reviews lao")
+        rev_vol_score = 1 if reviews > 0 else 0
 
-    # Reviews (20 pts)
-    if reviews >= 50:
-        strengths.append(f"Bahut reviews hain ({reviews})")
-        score += 20
-    elif reviews > 0:
-        issues.append(f"Kam reviews ({reviews}) — minimum 50 target karo")
-        score += 10
+    # Rating score (10 pts)
+    if reviews > 0:
+        if rating >= 4.5:
+            rating_score = 10
+        elif rating >= 4.0:
+            rating_score = 7
+        elif rating >= 3.5:
+            rating_score = 4
+        else:
+            rating_score = 1
     else:
-        issues.append("Koi review nahi — Magic QR se shuru karo")
+        rating_score = 0
 
-    # Photos (20 pts)
+    # Reply rate — unknown from Places, assume 0 as unknown
+    data["reply_rate"] = None  # Will be None = not shown
+    reply_score = 0  # unknown, flag as issue
+
+    score += rev_vol_score + rating_score + reply_score
+
+    # ── SEO Score (from description + categories) ─────────────────
+    desc = place.get("editorialSummary", {}).get("text", "") or ""
+    types = place.get("types", [])
+    primary_type = place.get("primaryType", "") or (types[0] if types else "")
+
+    # Basic SEO signals
+    seo_points = 0
+    if desc and len(desc) > 100:
+        seo_points += 40
+    elif desc:
+        seo_points += 20
+    if primary_type:
+        seo_points += 30
+    if len(types) > 2:
+        seo_points += 30
+
+    data["seo_score"] = min(seo_points, 100)
+    data["seo_status"] = "Good" if seo_points >= 70 else ("Average" if seo_points >= 40 else "Poor")
+
+    # SEO contribution to total (20 pts)
+    score += round(seo_points * 0.20)
+
+    # ── Photos (15 pts) ───────────────────────────────────────────
+    data["photos"] = photos
     if photos >= 10:
-        strengths.append(f"Achi photos hain ({photos})")
-        score += 20
-    elif photos > 0:
-        issues.append(f"Kam photos ({photos}) — 10+ quality images add karo")
-        score += 10
+        photo_score = 15
+    elif photos >= 5:
+        photo_score = 10
+    elif photos >= 1:
+        photo_score = 5
     else:
-        issues.append("Koi photo nahi — business photos add karo")
+        photo_score = 0
+    score += photo_score
 
-    # Website (15 pts)
-    if place.get("websiteUri"):
-        strengths.append("Website linked hai")
-        score += 15
-    else:
-        issues.append("Website nahi linked — credibility aur SEO weak hai")
+    # ── Posts — unknown from Places (note only) ───────────────────
+    data["post_activity"] = None  # unknown
 
-    # Phone (10 pts)
-    if place.get("nationalPhoneNumber"):
-        strengths.append("Phone number available hai")
-        score += 10
-    else:
-        issues.append("Phone number missing — customers contact nahi kar sakte")
+    # ── Search Rank — unknown from Places ─────────────────────────
+    data["search_rank"] = None  # unknown from Places API
 
-    # Hours (15 pts)
-    if place.get("regularOpeningHours"):
-        strengths.append("Business hours set hain")
-        score += 15
-    else:
-        issues.append("Business hours set nahi — customers ko pata nahi kab open ho")
+    # ── Cap score ─────────────────────────────────────────────────
+    score = min(max(score, 5), 85)  # Max 85 from Places — full 100 needs real data
 
-    score = min(score, 100)
-
-    if score >= 80:
-        grade, color = "Excellent", "🟢"
-        plan = "Premium Plan (₹7,500/month) — Advanced automation"
-    elif score >= 55:
+    if score >= 70:
         grade, color = "Good", "🟡"
-        plan = "Professional Plan (₹5,500/month) — Review management, insights, 30 GMB posts"
+    elif score >= 50:
+        grade, color = "Average", "🟠"
+    elif score >= 30:
+        grade, color = "Needs Work", "🔴"
     else:
-        grade, color = "Needs Improvement", "🔴"
-        plan = "Basic Plan (₹2,500/month) — GMB posts, Magic QR, citations"
+        grade, color = "Poor", "🔴"
 
     return {
         "score": score,
         "grade": grade,
         "color": color,
-        "plan": plan,
-        "issues": issues,
-        "strengths": strengths,
+        "data": data,
+        # Legacy fields for compatibility
         "rating": rating,
         "reviews": reviews,
-        "photos": photos
+        "photos": photos,
+        "issues": [],   # Not used in new format
+        "strengths": [] # Not used in new format
     }

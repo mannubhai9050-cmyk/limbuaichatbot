@@ -145,9 +145,16 @@ def _detect_lang(message: str, current_lang: str = "hi") -> str:
     return current_lang
 
 def _try_extract_business(message: str, session: dict):
+    """
+    Auto-detect business name + city in one message.
+    STRICT: Both must be present — city alone or generic terms NOT enough.
+    """
     if session.get("found_place") or session.get("search_places"):
         return None
+
     msg_lower = message.lower().strip()
+
+    # Must have a city
     found_city = None
     for city in INDIAN_CITIES:
         if city in msg_lower:
@@ -155,11 +162,44 @@ def _try_extract_business(message: str, session: dict):
             break
     if not found_city:
         return None
+
+    # Extract business name (remove city and noise words)
     business = re.sub(r"(?i)" + found_city, "", message)
-    business = re.sub(r"(?i)(mere|mera|meri|my|ka|ki|ke|business|shop|dhundho|check|batao|find|,|&|hai|ka naam)", "", business)
-    business = business.strip(" ,.-&")
+    business = re.sub(
+        r"(?i)(mere|mera|meri|my|ka|ki|ke|business|shop|dhundho|check|batao|find|,|&|hai|ka naam|mein|me|se|ka|ki)",
+        " ", business
+    )
+    business = business.strip(" ,.-& ")
+    business = re.sub(r"\s+", " ", business).strip()
+
+    # Must have a real business name — at least 3 chars
+    # Reject pure generic descriptions (exact match OR starts with generic word)
+    generic_starts = [
+        "manufacturer", "manufacturers", "supplier", "suppliers", "dealer",
+        "traders", "trader", "shop", "store", "company", "business",
+        "service", "services", "center", "centre", "restaurant", "clinic",
+        "hospital", "hotel", "school", "college", "office", "factory",
+        "i am", "i am on", "i am in", "every kind", "all kind", "all type"
+    ]
+    business_lower = business.lower()
     if len(business) < 3:
         return None
+    # Block if business name IS a generic word
+    for g in generic_starts:
+        if business_lower == g or business_lower.startswith(g + " ") or business_lower.startswith(g + "s "):
+            return None
+
+    # Also block if more than half the words are generic/filler
+    meaningful_words = [w for w in business.split() if len(w) > 3 and w.lower() not in
+                        {"every", "kind", "type", "bags", "items", "things", "stuff",
+                         "product", "products", "work", "works", "this", "that"}]
+    if len(meaningful_words) == 0:
+        return None
+
+    # Reject if business part is just a city variation
+    if business.lower() in [c.lower() for c in INDIAN_CITIES]:
+        return None
+
     return f"[ACTION:SEARCH_BUSINESS]name={business}|city={found_city}[/ACTION]"
 
 def _try_switch_business(msg_lower: str, businesses: list, session: dict, user_id: str) -> str:
@@ -346,7 +386,7 @@ def entry_node(state: ChatState) -> ChatState:
             if lang == "en":
                 reply = "I apologize for that! 😊 Please share the correct *business name* and *city* so I can find it."
             else:
-                reply = "Sorry 😊 Kripya sahi *business naam* aur *city* batayein taaki main dhundh sakoon."
+                reply = "Kshama karein! 😊 Kripya sahi *business naam* aur *city* batayein taaki main dhundh sakoon."
             state["raw_reply"] = reply
             state["action"] = "RESPOND"
             return state
@@ -736,5 +776,5 @@ def chat(user_id: str, message: str) -> str:
         result = app_graph.invoke({"user_id": user_id, "message": message})
         return result.get(
             "response",
-            "Sorry, something went wrong. Please try again or call 📞 9283344726."
+            "Sorry, something went wrong. Please try again or call 📞 +91 9289344726."
         )
