@@ -78,7 +78,7 @@ Monthly: Basic ₹2,500 | Professional ₹5,500 | Premium ₹7,500
 One-time: GMB Creation ₹3,000
 SEO: ₹5,999 / ₹9,999 / ₹15,999/month
 Ads: Google ₹2,500 | Meta ₹3,500
-Contact: 9283344726 | info@limbu.ai | Gurugram
+Contact: +91 9289344726 | info@limbu.ai | Gurugram
 
 ═══════════════════════════════════════
 ACTIONS — write tag then STOP, nothing after
