@@ -17,7 +17,7 @@ from app.core.llm import llm
 from app.core.prompts import get_main_prompt
 from langchain_core.messages import SystemMessage, HumanMessage
 
-# ── Per-user lock to prevent race conditions ──────────────────────
+# ── Per-user lock ─────────────────────────────────────────────────
 _user_locks: dict = {}
 _locks_mutex = threading.Lock()
 
@@ -26,6 +26,34 @@ def _get_user_lock(user_id: str) -> threading.Lock:
         if user_id not in _user_locks:
             _user_locks[user_id] = threading.Lock()
         return _user_locks[user_id]
+
+
+# ── LLM helper — language-aware, strips action tags ───────────────
+def _llm_reply(user_id: str, instruction: str) -> str:
+    """Generate a conversational reply using Claude. Strips any accidental action tags."""
+    session = get_session(user_id)
+    history = get_history(user_id)
+    last_user_msg = ""
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            last_user_msg = msg.get("content", "")
+            break
+    messages = [
+        SystemMessage(content=get_main_prompt(session)),
+        HumanMessage(content=last_user_msg or "hello"),
+        HumanMessage(content=(
+            f"[SYSTEM INSTRUCTION: {instruction}. "
+            f"Reply MUST be in the exact same language/script the user wrote in. "
+            f"You are Priya — always use female Hindi verb forms: karungi, bataungi, bhejungi, doongi. "
+            f"IMPORTANT: Write ONLY the conversational reply text. "
+            f"Do NOT include any [ACTION:...][/ACTION] tags in your reply.]"
+        ))
+    ]
+    response = llm.invoke(messages)
+    reply = response.content.strip()
+    # Strip any action tags Claude accidentally included
+    reply = re.sub(r'\[ACTION:[A-Z_]+\].*?\[/ACTION\]', '', reply, flags=re.DOTALL).strip()
+    return reply
 
 
 # ── Keywords ──────────────────────────────────────────────────────
@@ -46,7 +74,6 @@ CONNECTED_WORDS = {
     "ho gaya kya", "ab hua", "connect ho gya", "ho gya",
     "connected hai", "connect ho gaya hai", "hua kya", "link click"
 }
-# Already connected signals
 ALREADY_CONNECTED_WORDS = {
     "already connected", "pehle se connected", "already connect",
     "connected kar rakha", "connect kar rakha", "plan bhi", "plan le rakha",
@@ -57,8 +84,6 @@ ALREADY_CONNECTED_WORDS = {
     "check karo connected", "connected check", "mene connect",
     "connenct kar rakha", "connect kar liya", "already connected he"
 }
-
-# Wrong business / correction signals  
 WRONG_BUSINESS_WORDS = {
     "galat hai", "galat he", "yeh mera nahi", "ye mera nahi",
     "wrong", "nahi hai yeh", "different", "doosra", "alag",
@@ -99,53 +124,38 @@ _HINDI_WORDS = {
 
 
 def is_yes(text: str) -> bool:
-    """
-    Strict yes detection — only clear short affirmatives.
-    Long sentences (>6 words) with unrelated content are NOT yes.
-    Uses exact word boundaries to avoid false matches like 'hai' in YES_WORDS.
-    """
     t = text.lower().strip()
-    words = t.split()
-
-    # Long sentences are almost never a simple yes
-    if len(words) > 6:
+    if len(t.split()) > 6:
         return False
-
-    # Exact match against yes words (word boundary check)
-    import re as _re
     for w in YES_WORDS:
-        # Use word boundary matching
-        if _re.search(r'(?<![a-z])' + _re.escape(w) + r'(?![a-z])', t):
+        if re.search(r'(?<![a-z])' + re.escape(w) + r'(?![a-z])', t):
             return True
-
     return False
 
 
 def is_no(text: str) -> bool:
     t = text.lower().strip()
-    words = t.split()
-    import re as _re
     for w in NO_WORDS:
-        if _re.search(r'(?<![a-z])' + _re.escape(w) + r'(?![a-z])', t):
+        if re.search(r'(?<![a-z])' + re.escape(w) + r'(?![a-z])', t):
             return True
     return False
+
 
 def is_connected_confirm(text: str) -> bool:
     t = text.lower().strip()
     return any(w in t for w in CONNECTED_WORDS)
 
+
 def _detect_lang(message: str, current_lang: str = "hi") -> str:
-    # Unicode script detection (handles Tamil, Telugu, Kannada, Malayalam, Punjabi, Gujarati)
     for char in message:
         code = ord(char)
-        if 0x0B80 <= code <= 0x0BFF: return "ta"   # Tamil
-        if 0x0C00 <= code <= 0x0C7F: return "te"   # Telugu
-        if 0x0C80 <= code <= 0x0CFF: return "kn"   # Kannada
-        if 0x0D00 <= code <= 0x0D7F: return "ml"   # Malayalam
-        if 0x0A00 <= code <= 0x0A7F: return "pa"   # Punjabi
-        if 0x0A80 <= code <= 0x0AFF: return "gu"   # Gujarati
-        if 0x0900 <= code <= 0x097F: return "hi"   # Hindi/Devanagari
-    # Latin script — check English vs Hindi words
+        if 0x0B80 <= code <= 0x0BFF: return "ta"
+        if 0x0C00 <= code <= 0x0C7F: return "te"
+        if 0x0C80 <= code <= 0x0CFF: return "kn"
+        if 0x0D00 <= code <= 0x0D7F: return "ml"
+        if 0x0A00 <= code <= 0x0A7F: return "pa"
+        if 0x0A80 <= code <= 0x0AFF: return "gu"
+        if 0x0900 <= code <= 0x097F: return "hi"
     msg = message.strip().lower()
     words = [w.strip(".,!?") for w in msg.split() if w.strip(".,!?")]
     if not words or len(words) <= 2:
@@ -157,36 +167,11 @@ def _detect_lang(message: str, current_lang: str = "hi") -> str:
     if hi_count >= max(2, total * 0.3): return "hi"
     return current_lang
 
-def _llm_reply(user_id: str, instruction: str) -> str:
-    session = get_session(user_id)
-    history = get_history(user_id)
-    last_user_msg = ""
-    for msg in reversed(history):
-        if msg.get("role") == "user":
-            last_user_msg = msg.get("content", "")
-            break
-    messages = [
-        SystemMessage(content=get_main_prompt(session)),
-        HumanMessage(content=last_user_msg or "hello"),
-        HumanMessage(content=f"[SYSTEM INSTRUCTION: {instruction}. "
-                              f"Reply MUST be in exact same language/script the user wrote in. "
-                              f"You are Priya — female tone: karungi, bataungi, bhejungi.]")
-    ]
-    response = llm.invoke(messages)
-    return response.content.strip()
-    
 
 def _try_extract_business(message: str, session: dict):
-    """
-    Auto-detect business name + city in one message.
-    STRICT: Both must be present — city alone or generic terms NOT enough.
-    """
     if session.get("found_place") or session.get("search_places"):
         return None
-
     msg_lower = message.lower().strip()
-
-    # Must have a city
     found_city = None
     for city in INDIAN_CITIES:
         if city in msg_lower:
@@ -194,18 +179,12 @@ def _try_extract_business(message: str, session: dict):
             break
     if not found_city:
         return None
-
-    # Extract business name (remove city and noise words)
     business = re.sub(r"(?i)" + found_city, "", message)
     business = re.sub(
         r"(?i)(mere|mera|meri|my|ka|ki|ke|business|shop|dhundho|check|batao|find|,|&|hai|ka naam|mein|me|se|ka|ki)",
         " ", business
     )
-    business = business.strip(" ,.-& ")
-    business = re.sub(r"\s+", " ", business).strip()
-
-    # Must have a real business name — at least 3 chars
-    # Reject pure generic descriptions (exact match OR starts with generic word)
+    business = re.sub(r"\s+", " ", business).strip(" ,.-& ")
     generic_starts = [
         "manufacturer", "manufacturers", "supplier", "suppliers", "dealer",
         "traders", "trader", "shop", "store", "company", "business",
@@ -213,36 +192,25 @@ def _try_extract_business(message: str, session: dict):
         "hospital", "hotel", "school", "college", "office", "factory",
         "i am", "i am on", "i am in", "every kind", "all kind", "all type"
     ]
-    business_lower = business.lower()
     if len(business) < 3:
         return None
-    # Block if business name IS a generic word
+    bl = business.lower()
     for g in generic_starts:
-        if business_lower == g or business_lower.startswith(g + " ") or business_lower.startswith(g + "s "):
+        if bl == g or bl.startswith(g + " ") or bl.startswith(g + "s "):
             return None
-
-    # Also block if more than half the words are generic/filler
     meaningful_words = [w for w in business.split() if len(w) > 3 and w.lower() not in
                         {"every", "kind", "type", "bags", "items", "things", "stuff",
                          "product", "products", "work", "works", "this", "that"}]
     if len(meaningful_words) == 0:
         return None
-
-    # Reject if business part is just a city variation
     if business.lower() in [c.lower() for c in INDIAN_CITIES]:
         return None
-
     return f"[ACTION:SEARCH_BUSINESS]name={business}|city={found_city}[/ACTION]"
 
+
 def _try_switch_business(msg_lower: str, businesses: list, session: dict, user_id: str) -> str:
-    """
-    Detect business switch request.
-    Returns: "switched" | "needs_city_confirm" | ""
-    For duplicate-name businesses, asks user to specify city.
-    """
     if not businesses:
         return ""
-
     matched = []
     for b in businesses:
         title = b.get("title", "").lower().strip()
@@ -251,26 +219,19 @@ def _try_switch_business(msg_lower: str, businesses: list, session: dict, user_i
         title_words = [w for w in title.split() if len(w) > 3]
         if title in msg_lower or any(w in msg_lower for w in title_words):
             matched.append(b)
-
     if not matched:
         return ""
 
     def _city_match(locality: str, msg: str) -> bool:
-        """Fuzzy city match — handles typos like gwahati→guwahati"""
-        if not locality:
-            return False
-        if locality in msg:
-            return True
-        # 4-char sliding window match
+        if not locality: return False
+        if locality in msg: return True
         for word in msg.split():
-            if len(word) < 4:
-                continue
+            if len(word) < 4: continue
             for i in range(len(word) - 3):
                 if word[i:i+4] in locality:
                     return True
         return False
 
-    # Check if user also mentioned a city/locality
     for b in matched:
         locality = b.get("locality", "").lower()
         address = b.get("address", "").lower()
@@ -278,20 +239,17 @@ def _try_switch_business(msg_lower: str, businesses: list, session: dict, user_i
             matched = [b]
             break
 
-    # Multiple matches with same name — need city confirmation
     if len(matched) > 1:
-        # Store pending matches for next message
         session["pending_business_matches"] = matched
         save_session(user_id, session)
-        print(f"[Graph] Multiple matches for business: {[b['title'] for b in matched]}")
+        print(f"[Graph] Multiple matches: {[b['title'] for b in matched]}")
         return "needs_city_confirm"
 
-    # Single match — switch directly
     b = matched[0]
-    current = session.get("active_business_name", "")
     biz_title = b.get("title", "")
+    current = session.get("active_business_name", "")
     if current == biz_title and session.get("active_location_id"):
-        return "switched"  # already selected, no change needed
+        return "switched"
     session["active_business_name"] = biz_title
     session["active_location_id"] = (
         b.get("locationResourceName") or b.get("locationId") or b.get("id") or ""
@@ -299,7 +257,7 @@ def _try_switch_business(msg_lower: str, businesses: list, session: dict, user_i
     session["features_offered"] = []
     session.pop("pending_business_matches", None)
     save_session(user_id, session)
-    print(f"[Graph] Business switched to: {biz_title} → {session['active_location_id']}")
+    print(f"[Graph] Switched to: {biz_title} → {session['active_location_id']}")
     return "switched"
 
 
@@ -333,13 +291,19 @@ def start_connection_polling(user_id: str, phone: str):
                     break
                 if session.get("connect_phone") != phone:
                     break
-                res = httpx.get(f"{LIMBU_API_BASE}/gmb/status", params={"phone": phone}, timeout=10)
+                res = httpx.get(
+                    f"{LIMBU_API_BASE}/gmb/status",
+                    params={"phone": phone}, timeout=10
+                )
                 data = res.json()
                 print(f"[ConnPoll] {user_id} attempt {attempt+1}: {data.get('status')}")
                 if data.get("status") == "success" or data.get("success"):
                     email = data.get("email", "")
-                    locations = data.get("locationsData") or data.get("businesses") or data.get("data") or []
+                    locations = (data.get("locationsData") or
+                                 data.get("businesses") or
+                                 data.get("data") or [])
                     session["connect_verified"] = True
+                    session["connect_link_sent"] = True
                     session["connected_email"] = email
                     session["connected_businesses"] = locations
                     save_session(user_id, session)
@@ -371,7 +335,7 @@ class ChatState(TypedDict, total=False):
 def entry_node(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     message = state["message"]
-    session = get_session(user_id)  # Always fresh from Redis
+    session = get_session(user_id)
     msg_lower = message.lower().strip()
 
     # Language detection
@@ -381,7 +345,6 @@ def entry_node(state: ChatState) -> ChatState:
         session["lang"] = lang
         save_session(user_id, session)
 
-    # First greeting
     if not session.get("greeted"):
         session["greeted"] = True
         save_session(user_id, session)
@@ -403,17 +366,15 @@ def entry_node(state: ChatState) -> ChatState:
         state["action"] = "RESPOND"
         return state
 
-    # ── PRIORITY: Already connected — user says business is connected ──
+    # ── PRIORITY: Already connected ───────────────────────────────
     if not session.get("connect_verified"):
         if any(w in msg_lower for w in ALREADY_CONNECTED_WORDS):
-            # User says they are already connected — verify via API
             state["action"] = "CHECK_LATEST_CONNECTION"
             return state
 
-    # ── PRIORITY: Wrong business — user says shown result is wrong ─────
+    # ── PRIORITY: Wrong business ──────────────────────────────────
     if session.get("found_place") and not session.get("confirmed"):
         if any(w in msg_lower for w in WRONG_BUSINESS_WORDS):
-            # Reset search so user can provide correct name
             session.pop("found_place", None)
             session.pop("search_places", None)
             session.pop("result_index", None)
@@ -430,12 +391,11 @@ def entry_node(state: ChatState) -> ChatState:
             state["action"] = "RESPOND"
             return state
 
-    # Also handle correction when user mentions their actual location/shop
+    # Correction after confirm
     if session.get("confirmed") and not session.get("analysis"):
         correction_signals = ["hamara shop", "mera shop", "hamare yahan", "our shop", "my shop",
-                              "actually", "actually mera", "nahi woh", "alag hai"]
+                              "actually", "nahi woh", "alag hai"]
         if any(w in msg_lower for w in correction_signals):
-            # User is correcting — reset and let Claude handle with search
             session.pop("found_place", None)
             session.pop("search_places", None)
             session.pop("confirmed", None)
@@ -443,13 +403,13 @@ def entry_node(state: ChatState) -> ChatState:
             session.pop("business_name", None)
             session.pop("city", None)
             save_session(user_id, session)
-            # Let Claude handle with fresh context
             reply = detect_and_respond(user_id, message)
-            state["raw_reply"] = reply
+            clean = re.sub(r'\[ACTION:[A-Z_]+\].*?\[/ACTION\]', '', reply, flags=re.DOTALL).strip()
+            state["raw_reply"] = clean
             state["action"] = _detect_action(reply) if "[ACTION:" in reply else "RESPOND"
             return state
 
-    # ── 1. Connected words (link sent, not verified) ──────────────
+    # ── 1. Connect link sent → check connected ────────────────────
     if session.get("connect_link_sent") and not session.get("connect_verified"):
         if is_connected_confirm(message):
             state["action"] = "CHECK_LATEST_CONNECTION"
@@ -465,18 +425,14 @@ def entry_node(state: ChatState) -> ChatState:
         elif is_no(message):
             state["action"] = "NEXT_RESULT"
             return state
-        # Else: user said something unrelated → let Claude handle it
-        # (don't auto-confirm or auto-deny)
 
     # ── 3. Analyse ────────────────────────────────────────────────
     if session.get("confirmed") and not session.get("analysis"):
         if is_yes(message):
             state["action"] = "ANALYSE"
             return state
-        analyse_words = [
-            "analyse", "analysis", "check", "report", "karein",
-            "karo", "nikalo", "dikhao", "bata", "batao", "dekho"
-        ]
+        analyse_words = ["analyse", "analysis", "check", "report", "karein",
+                         "karo", "nikalo", "dikhao", "bata", "batao", "dekho"]
         if any(w in msg_lower for w in analyse_words):
             state["action"] = "ANALYSE"
             return state
@@ -493,36 +449,34 @@ def entry_node(state: ChatState) -> ChatState:
         switch_result = _try_switch_business(msg_lower, businesses, session, user_id)
 
         if switch_result == "needs_city_confirm":
-            # Multiple businesses with same name — ask for city
             session = get_session(user_id)
             pending = session.get("pending_business_matches", [])
-            lang = session.get("lang", "hi")
-            cities = [b.get("locality") or b.get("address","")[:20] for b in pending]
+            cities = [b.get("locality") or b.get("address", "")[:20] for b in pending]
             cities_str = " / ".join(f"*{c}*" for c in cities if c)
-            if lang == "en":
-                ack = f"I found multiple locations for this business:\n{cities_str}\n\nWhich city/location do you need?"
-            else:
-                ack = f"Is business ki multiple locations hain:\n{cities_str}\n\nKaunsi city/location chahiye aapko?"
-            state["raw_reply"] = ack
+            reply = _llm_reply(
+                user_id,
+                f"Is business ki multiple locations hain: {cities_str}. "
+                "User se politely poocho kaunsi location/city chahiye."
+            )
+            state["raw_reply"] = reply
             state["action"] = "RESPOND"
             return state
 
         elif switch_result == "switched":
-            # Check if pending matches existed (user replied with city)
             session = get_session(user_id)
             session.pop("pending_business_matches", None)
             save_session(user_id, session)
             biz_name = session.get("active_business_name", "")
-            lang = session.get("lang", "hi")
-            if lang == "en":
-                ack = f"Got it! Switched to *{biz_name}*. 😊\n\nWhich feature would you like?"
-            else:
-                ack = f"Theek hai! *{biz_name}* select kar liya. 😊\n\nIs business ke liye kaunsa feature chahiye?"
-            state["raw_reply"] = ack
+            reply = _llm_reply(
+                user_id,
+                f"Business *{biz_name}* select ho gaya. "
+                "Confirm karo aur poocho kaunsa feature chahiye: "
+                "Health Report, Magic QR, Insights, Website, ya Review Reply."
+            )
+            state["raw_reply"] = reply
             state["action"] = "RESPOND"
             return state
 
-        # Check if user is replying to pending city confirmation
         pending = session.get("pending_business_matches", [])
         if pending:
             for b in pending:
@@ -531,24 +485,26 @@ def entry_node(state: ChatState) -> ChatState:
                 addr_words = [w for w in address.split() if len(w) > 3]
                 if (locality and locality in msg_lower) or any(w in msg_lower for w in addr_words):
                     session["active_business_name"] = b.get("title", "")
-                    session["active_location_id"] = b.get("locationResourceName") or b.get("locationId") or ""
+                    session["active_location_id"] = (
+                        b.get("locationResourceName") or b.get("locationId") or ""
+                    )
                     session["features_offered"] = []
                     session.pop("pending_business_matches", None)
                     save_session(user_id, session)
                     biz_name = b.get("title", "")
-                    lang = session.get("lang", "hi")
-                    if lang == "en":
-                        ack = f"Got it! Switched to *{biz_name}* ({b.get('locality','')}). 😊\n\nWhich feature would you like?"
-                    else:
-                        ack = f"Theek hai! *{biz_name}* ({b.get('locality','')}) select kar liya. 😊\n\nKaunsa feature chahiye?"
-                    state["raw_reply"] = ack
+                    reply = _llm_reply(
+                        user_id,
+                        f"Business *{biz_name}* ({b.get('locality', '')}) select ho gaya. "
+                        "Confirm karo aur poocho kaunsa feature chahiye."
+                    )
+                    state["raw_reply"] = reply
                     state["action"] = "RESPOND"
                     return state
 
         feature_keywords = {
             "health report": "health_score", "health score": "health_score", "health": "health_score",
             "magic qr": "magic_qr", "qr code": "magic_qr", "qr": "magic_qr",
-            "insight": "insights", "performance": "insights",
+            "insight": "insights", "inshit": "insights", "performance": "insights",
             "website": "website", "site": "website",
             "review reply": "review_reply", "review": "review_reply"
         }
@@ -573,7 +529,7 @@ def entry_node(state: ChatState) -> ChatState:
             state["action"] = "CHECK_BUSINESS_EMAIL"
             return state
 
-    # ── 7. Business + city in one message ─────────────────────────
+    # ── 7. Business + city ────────────────────────────────────────
     smart = _try_extract_business(message, session)
     if smart:
         state["raw_reply"] = smart
@@ -593,7 +549,9 @@ def entry_node(state: ChatState) -> ChatState:
             state["raw_reply"] = reply
         return state
 
-    state["raw_reply"] = reply
+    # Clean accidental action tags from plain text
+    clean_reply = re.sub(r'\[ACTION:[A-Z_]+\].*?\[/ACTION\]', '', reply, flags=re.DOTALL).strip()
+    state["raw_reply"] = clean_reply
     state["action"] = "RESPOND"
     return state
 
@@ -616,6 +574,7 @@ def node_respond(state: ChatState) -> ChatState:
     state["response"] = state["raw_reply"]
     return state
 
+
 def node_confirmed(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
@@ -623,12 +582,15 @@ def node_confirmed(state: ChatState) -> ChatState:
     name = place.get("displayName", {}).get("text", "your business")
     reply = _llm_reply(
         user_id,
-        f"Business *{name}* confirm ho gaya. "
-        "Warmly congratulate karo aur poocho kya Google Business Profile analyse karein."
+        f"Business *{name}* confirm ho gaya hai. "
+        "Warmly acknowledge karo. Phir poocho: "
+        "Kya main Google Business Profile analyse karoon? "
+        "Do NOT say business is connected. Do NOT mention any connection status."
     )
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
+
 
 def node_search_business(state: ChatState) -> ChatState:
     user_id = state["user_id"]
@@ -639,10 +601,12 @@ def node_search_business(state: ChatState) -> ChatState:
         reply = handle_search(user_id, session, params.get("name", ""), params.get("city", ""))
     else:
         lang = session.get("lang", "hi")
-        reply = "Please share your business name and city. 😊" if lang == "en" else "Kripya apna business naam aur city batayein. 😊"
+        reply = "Please share your business name and city. 😊" if lang == "en" else \
+                "Kripya apna business naam aur city batayein. 😊"
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
+
 
 def node_next_result(state: ChatState) -> ChatState:
     user_id = state["user_id"]
@@ -652,6 +616,7 @@ def node_next_result(state: ChatState) -> ChatState:
     state["response"] = reply
     return state
 
+
 def node_analyse(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
@@ -659,6 +624,7 @@ def node_analyse(state: ChatState) -> ChatState:
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
+
 
 def node_connect_business(state: ChatState) -> ChatState:
     user_id = state["user_id"]
@@ -672,6 +638,7 @@ def node_connect_business(state: ChatState) -> ChatState:
     state["response"] = reply
     return state
 
+
 def node_check_latest_connection(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
@@ -679,6 +646,7 @@ def node_check_latest_connection(state: ChatState) -> ChatState:
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
+
 
 def node_check_business_email(state: ChatState) -> ChatState:
     user_id = state["user_id"]
@@ -693,6 +661,7 @@ def node_check_business_email(state: ChatState) -> ChatState:
     state["response"] = reply
     return state
 
+
 def node_feature(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
@@ -705,13 +674,14 @@ def node_feature(state: ChatState) -> ChatState:
         reply = _llm_reply(
             user_id,
             "User ne feature maanga par specify nahi kiya. "
-            "Poocho: Health Report, Magic QR, Insights, Website, ya Review Reply — kaunsa chahiye?"
+            "Poocho: Health Report, Magic QR, Insights, Website, ya Review Reply?"
         )
     else:
         reply = handle_feature(user_id, session, feature_type)
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
+
 
 def node_book_demo(state: ChatState) -> ChatState:
     user_id = state["user_id"]
@@ -720,7 +690,6 @@ def node_book_demo(state: ChatState) -> ChatState:
     if match:
         params = extract_action_params(match.group(1))
         print(f"[Demo] Booking: {params}")
-        # If phone missing, try to get from session/user_id
         phone = params.get("phone", "")
         if not phone and user_id.startswith("wa_"):
             phone = user_id.replace("wa_", "")
@@ -734,13 +703,14 @@ def node_book_demo(state: ChatState) -> ChatState:
             time=params.get("time", "")
         )
     else:
-        print(f"[Demo] No BOOK_DEMO tag found in: {raw[:100]}")
         session = get_session(user_id)
         lang = session.get("lang", "hi")
-        reply = "Please share your name, phone number, and preferred date/time. 😊" if lang == "en" else                 "Kripya naam, phone number, aur date/time batayein. 😊"
+        reply = "Please share your name, phone number, and preferred date/time. 😊" if lang == "en" else \
+                "Kripya naam, phone number, aur date/time batayein. 😊"
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
+
 
 def node_check_user(state: ChatState) -> ChatState:
     user_id = state["user_id"]
@@ -757,8 +727,10 @@ def node_check_user(state: ChatState) -> ChatState:
             ctx = f"User found. Continue in {'English' if lang=='en' else 'Hindi'}."
         else:
             ctx = f"New user. Continue in {'English' if lang=='en' else 'Hindi'}."
-        follow_up = llm.invoke([SystemMessage(content=get_main_prompt(session)),
-                                HumanMessage(content=f"[SYSTEM: {ctx}]")])
+        follow_up = llm.invoke([
+            SystemMessage(content=get_main_prompt(session)),
+            HumanMessage(content=f"[SYSTEM: {ctx}]")
+        ])
         reply = follow_up.content.strip()
     else:
         reply = "Kripya phone number batayein. 😊"
@@ -799,9 +771,9 @@ def build_graph():
         "BOOK_DEMO": "book_demo",
         "CHECK_USER": "check_user",
     })
-    for node in ["respond","confirmed","search_business","next_result","analyse",
-                 "connect_business","check_latest_connection","check_business_email",
-                 "feature","book_demo","check_user"]:
+    for node in ["respond", "confirmed", "search_business", "next_result", "analyse",
+                 "connect_business", "check_latest_connection", "check_business_email",
+                 "feature", "book_demo", "check_user"]:
         graph.add_edge(node, END)
     return graph.compile()
 
@@ -810,9 +782,8 @@ app_graph = build_graph()
 
 
 def chat(user_id: str, message: str) -> str:
-    """Process with per-user lock to prevent race conditions"""
     lock = _get_user_lock(user_id)
-    with lock:  # Only one message per user processed at a time
+    with lock:
         save_message(user_id, "user", message)
         result = app_graph.invoke({"user_id": user_id, "message": message})
         return result.get(

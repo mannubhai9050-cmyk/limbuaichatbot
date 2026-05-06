@@ -96,54 +96,31 @@ def _deliver(user_id: str, phone: str, action: str, result: dict):
         wa_phone = phone if phone.startswith("91") else "91" + phone
 
         # ── Send based on action type ─────────────────────────────
-        if action == "health_score":
-            # 1. Send text report
-            save_message(user_id, "assistant", text_msg)
-            send_whatsapp(wa_phone, text_msg)
+        # All actions: send single combined message (URL as text = WhatsApp shows preview)
+        final_msg = text_msg
 
-            # 2. Send PDF as document (separate message)
+        if action == "health_score":
             pdf_url = result.get("pdf_url", "")
-            if pdf_url:
-                biz_name = result.get("message", "").replace("Health score report generated for ", "")
-                pdf_caption = f"📄 Full Health Report — {biz_name}"
-                send_whatsapp_document(wa_phone, pdf_url, f"Health-Report.pdf", pdf_caption)
-                save_message(user_id, "assistant", f"📄 Full PDF: {pdf_url}")
+            if pdf_url and pdf_url not in final_msg:
+                final_msg += f"\n\n📄 *Full Report (PDF):*\n{pdf_url}"
 
         elif action == "magic_qr":
-            # 1. Send text with review link
-            save_message(user_id, "assistant", text_msg)
-            send_whatsapp(wa_phone, text_msg)
-
-            # 2. Send QR as image (separate message)
             qr_url = result.get("url", "") or result.get("qr_url", "")
-            if qr_url:
-                biz = result.get("message", "").replace("QR code ready for ", "")
-                qr_caption = f"🔮 Magic QR Code — {biz}\nScan to leave a Google review!"
-                send_whatsapp_image(wa_phone, qr_url, qr_caption)
-                save_message(user_id, "assistant", f"🔮 QR Code image: {qr_url}")
+            if qr_url and qr_url not in final_msg:
+                final_msg += f"\n\n🔮 *QR Code Image:*\n{qr_url}"
 
         elif action == "insights":
-            # 1. Send text insights
-            save_message(user_id, "assistant", text_msg)
-            send_whatsapp(wa_phone, text_msg)
-
-            # 2. Send PDF
             pdf_url = result.get("pdfUrl", "") or result.get("pdf_url", "")
-            if pdf_url:
-                send_whatsapp_document(wa_phone, pdf_url, "Performance-Report.pdf", "📊 Full Insights Report")
-                save_message(user_id, "assistant", f"📊 Full PDF: {pdf_url}")
+            if pdf_url and pdf_url not in final_msg:
+                final_msg += f"\n\n📄 *Full Report (PDF):*\n{pdf_url}"
 
         elif action == "website":
-            save_message(user_id, "assistant", text_msg)
-            send_whatsapp(wa_phone, text_msg)
+            url = result.get("url", "") or result.get("website_url", "")
+            if url and url not in final_msg:
+                final_msg += f"\n\n🌐 *Website URL:*\n{url}"
 
-        elif action == "review_reply":
-            save_message(user_id, "assistant", text_msg)
-            send_whatsapp(wa_phone, text_msg)
-
-        else:
-            save_message(user_id, "assistant", text_msg)
-            send_whatsapp(wa_phone, text_msg)
+        save_message(user_id, "assistant", final_msg)
+        send_whatsapp(wa_phone, final_msg)
 
         # Send next offer
         if next_offer:
