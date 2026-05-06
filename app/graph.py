@@ -174,6 +174,7 @@ def _llm_reply(user_id: str, instruction: str) -> str:
     ]
     response = llm.invoke(messages)
     return response.content.strip()
+    
 
 def _try_extract_business(message: str, session: dict):
     """
