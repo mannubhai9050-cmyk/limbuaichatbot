@@ -36,6 +36,6 @@ CHATBOT_ACTION_RESULT_API = os.getenv(
 # ── App Settings ──────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 MAX_CHAT_HISTORY = 100       # Keep last 20 messages only
-SESSION_TTL = 7200          # 2 hours session
+SESSION_TTL = 2592000          # 30 days session
 CHAT_TTL = 604800           # 7 days chat history
 TIMEZONE = "Asia/Kolkata"

@@ -65,6 +65,44 @@ def _parse_field(val):
     return {}
 
 
+def _extract_template_button_text(body: dict) -> str:
+    """
+    Extract text from WhatsApp template button responses.
+    When user clicks a button, WA sends special payload.
+    Formats seen:
+    - message.type = "interactive" with message.interactive.button_reply.title
+    - message.type = "button" with message.button.text
+    - message.button_reply.title
+    """
+    msg = _parse_field(body.get("message") or {})
+    msg_type = msg.get("type", "")
+
+    # Interactive button reply
+    if msg_type == "interactive":
+        interactive = _parse_field(msg.get("interactive") or {})
+        btn_reply = _parse_field(interactive.get("button_reply") or {})
+        if btn_reply.get("title"):
+            return btn_reply["title"]
+        list_reply = _parse_field(interactive.get("list_reply") or {})
+        if list_reply.get("title"):
+            return list_reply["title"]
+
+    # Button reply
+    if msg_type == "button":
+        btn = _parse_field(msg.get("button") or {})
+        if btn.get("text"):
+            return btn["text"]
+        if btn.get("payload"):
+            return btn["payload"]
+
+    # Direct button_reply in message
+    btn_reply = _parse_field(msg.get("button_reply") or {})
+    if btn_reply.get("title"):
+        return btn_reply["title"]
+
+    return ""
+
+
 async def _process_chat(body: dict, headers) -> dict:
     """
     Parse WhatsApp webhook. Exact format:
@@ -98,14 +136,20 @@ async def _process_chat(body: dict, headers) -> dict:
         if not phone_norm.startswith("91") and len(phone_norm) == 10:
             phone_norm = "91" + phone_norm
 
-    # ── message → text (content field is the actual text) ─────────
+    # ── message → text ────────────────────────────────────────────
+    # Check template button click first
+    btn_text = _extract_template_button_text(body)
+
     msg = _parse_field(body.get("message") or {})
-    message = str(
+    raw_text = str(
         msg.get("content") or msg.get("text") or
         msg.get("body") or msg.get("caption") or
         body.get("content") or body.get("text") or
         body.get("body") or ""
     ).strip()
+
+    # Use button text if available, else raw text
+    message = btn_text or raw_text
 
     if not message:
         print(f"[Webhook] No text — msg={msg} body_keys={list(body.keys())}")

@@ -34,12 +34,12 @@ FEATURE_NEXT_OFFER = {
         "hi": (
             "🎉 Bahut achha! Aapne saari FREE features try kar li hain!\n\n"
             "Ek plan leke in features ko regularly automate karein.\n"
-            "📞 +91 9289344726"
+            "📞 9283344726"
         ),
         "en": (
             "🎉 Great! You've tried all FREE features!\n\n"
             "Get a plan to automate these features regularly.\n"
-            "📞 +91 9289344726"
+            "📞 9283344726"
         )
     }
 }
@@ -58,7 +58,7 @@ def handle_feature(user_id: str, session: dict, feature_type: str) -> str:
     phone = _get_phone(user_id, session)
     if not phone:
         label = FEATURE_LABELS.get(feature_type, feature_type)
-        return f"Please call: 📞 +91 9289344726" if en else f"Kripya call karein: 📞 +91 9289344726"
+        return f"Please call: 📞 9283344726" if en else f"Kripya call karein: 📞 9283344726"
 
     # ── Get locationResourceName — prefer active (switched) business ─
     location_id = session.get("active_location_id") or _get_location_resource_name(session)
@@ -88,13 +88,13 @@ def handle_feature(user_id: str, session: dict, feature_type: str) -> str:
             return (
                 f"*{label}* ran into a small issue. 😕\n"
                 f"{f'({error_msg})' if error_msg else ''}\n\n"
-                f"Please call: 📞 +91 9289344726\n\n"
+                f"Please call: 📞 9283344726\n\n"
                 f"{next_offer}"
             )
         return (
             f"*{label}* mein thodi problem aayi. 😕\n"
             f"{f'({error_msg})' if error_msg else ''}\n\n"
-            f"Kripya call karein: 📞 +91 9289344726\n\n"
+            f"Kripya call karein: 📞 9283344726\n\n"
             f"{next_offer}"
         )
 

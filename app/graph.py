@@ -51,7 +51,11 @@ ALREADY_CONNECTED_WORDS = {
     "already connected", "pehle se connected", "already connect",
     "connected kar rakha", "connect kar rakha", "plan bhi", "plan le rakha",
     "pehle connect", "connected hai", "already ho gaya", "bhai connected",
-    "mera connected", "kar liya connect", "already link", "connected hun"
+    "mera connected", "kar liya connect", "already link", "connected hun",
+    "connect to he", "connect to hai", "connect he", "connected he",
+    "kar rakha he", "kar rakha hai", "connected to", "already kar",
+    "check karo connected", "connected check", "mene connect",
+    "connenct kar rakha", "connect kar liya", "already connected he"
 }
 
 # Wrong business / correction signals  
@@ -131,6 +135,17 @@ def is_connected_confirm(text: str) -> bool:
     return any(w in t for w in CONNECTED_WORDS)
 
 def _detect_lang(message: str, current_lang: str = "hi") -> str:
+    # Unicode script detection (handles Tamil, Telugu, Kannada, Malayalam, Punjabi, Gujarati)
+    for char in message:
+        code = ord(char)
+        if 0x0B80 <= code <= 0x0BFF: return "ta"   # Tamil
+        if 0x0C00 <= code <= 0x0C7F: return "te"   # Telugu
+        if 0x0C80 <= code <= 0x0CFF: return "kn"   # Kannada
+        if 0x0D00 <= code <= 0x0D7F: return "ml"   # Malayalam
+        if 0x0A00 <= code <= 0x0A7F: return "pa"   # Punjabi
+        if 0x0A80 <= code <= 0x0AFF: return "gu"   # Gujarati
+        if 0x0900 <= code <= 0x097F: return "hi"   # Hindi/Devanagari
+    # Latin script — check English vs Hindi words
     msg = message.strip().lower()
     words = [w.strip(".,!?") for w in msg.split() if w.strip(".,!?")]
     if not words or len(words) <= 2:
@@ -138,11 +153,27 @@ def _detect_lang(message: str, current_lang: str = "hi") -> str:
     en_count = sum(1 for w in words if w in _ENGLISH_WORDS)
     hi_count = sum(1 for w in words if w in _HINDI_WORDS)
     total = len(words)
-    if en_count >= max(2, total * 0.4):
-        return "en"
-    if hi_count >= max(2, total * 0.3):
-        return "hi"
+    if en_count >= max(2, total * 0.4): return "en"
+    if hi_count >= max(2, total * 0.3): return "hi"
     return current_lang
+
+def _llm_reply(user_id: str, instruction: str) -> str:
+    session = get_session(user_id)
+    history = get_history(user_id)
+    last_user_msg = ""
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            last_user_msg = msg.get("content", "")
+            break
+    messages = [
+        SystemMessage(content=get_main_prompt(session)),
+        HumanMessage(content=last_user_msg or "hello"),
+        HumanMessage(content=f"[SYSTEM INSTRUCTION: {instruction}. "
+                              f"Reply MUST be in exact same language/script the user wrote in. "
+                              f"You are Priya — female tone: karungi, bataungi, bhejungi.]")
+    ]
+    response = llm.invoke(messages)
+    return response.content.strip()
 
 def _try_extract_business(message: str, session: dict):
     """
@@ -356,11 +387,18 @@ def entry_node(state: ChatState) -> ChatState:
 
     # ── Fast path: greeting ───────────────────────────────────────
     history = get_history(user_id)
-    if len(history) <= 2 and msg_lower in {
-        "hi", "hello", "hey", "hlo", "helo", "hii", "namaste", "hy", "start"
-    }:
+    GREET_EN = {"hi", "hello", "hey", "hlo", "helo", "hii", "hy", "start"}
+    GREET_HI = {"namaste", "namaskar", "hnji"}
+    if len(history) <= 2 and msg_lower in GREET_EN | GREET_HI:
         from app.nodes.intent import FIRST_MSG_EN, FIRST_MSG_HI
-        state["raw_reply"] = FIRST_MSG_EN if lang == "en" else FIRST_MSG_HI
+        if msg_lower in GREET_EN:
+            first_reply = FIRST_MSG_EN
+            session["lang"] = "en"
+        else:
+            first_reply = FIRST_MSG_HI
+            session["lang"] = "hi"
+        save_session(user_id, session)
+        state["raw_reply"] = first_reply
         state["action"] = "RESPOND"
         return state
 
@@ -382,11 +420,11 @@ def entry_node(state: ChatState) -> ChatState:
             session.pop("business_name", None)
             session.pop("city", None)
             save_session(user_id, session)
-            lang = session.get("lang", "hi")
-            if lang == "en":
-                reply = "I apologize for that! 😊 Please share the correct *business name* and *city* so I can find it."
-            else:
-                reply = "Kshama karein! 😊 Kripya sahi *business naam* aur *city* batayein taaki main dhundh sakoon."
+            reply = _llm_reply(
+                user_id,
+                "User ne bola ki shown business galat hai. "
+                "Politely apologize karo aur correct business name aur city maango."
+            )
             state["raw_reply"] = reply
             state["action"] = "RESPOND"
             return state
@@ -582,11 +620,11 @@ def node_confirmed(state: ChatState) -> ChatState:
     session = get_session(user_id)
     place = session.get("found_place", {})
     name = place.get("displayName", {}).get("text", "your business")
-    lang = session.get("lang", "hi")
-    if lang == "en":
-        reply = f"Great! ✅ *{name}* confirmed.\n\nShall I analyse your Google Business Profile? 😊"
-    else:
-        reply = f"Bahut achha! ✅ *{name}* confirm ho gaya.\n\nKya main aapki Google Business Profile analyse karoon? 😊"
+    reply = _llm_reply(
+        user_id,
+        f"Business *{name}* confirm ho gaya. "
+        "Warmly congratulate karo aur poocho kya Google Business Profile analyse karein."
+    )
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -662,10 +700,12 @@ def node_feature(state: ChatState) -> ChatState:
         m = re.search(r'\[ACTION:FEATURE\]type=(\w+)\[/ACTION\]', state.get("raw_reply", ""))
         if m:
             feature_type = m.group(1)
-    lang = session.get("lang", "hi")
     if not feature_type:
-        reply = "Which feature? Health Report, Magic QR, Insights, Website, or Review Reply? 😊" if lang == "en" else \
-                "Kaunsa feature chahiye? Health Report, Magic QR, Insights, Website, ya Review Reply? 😊"
+        reply = _llm_reply(
+            user_id,
+            "User ne feature maanga par specify nahi kiya. "
+            "Poocho: Health Report, Magic QR, Insights, Website, ya Review Reply — kaunsa chahiye?"
+        )
     else:
         reply = handle_feature(user_id, session, feature_type)
     save_message(user_id, "assistant", reply)
@@ -776,5 +816,5 @@ def chat(user_id: str, message: str) -> str:
         result = app_graph.invoke({"user_id": user_id, "message": message})
         return result.get(
             "response",
-            "Sorry, something went wrong. Please try again or call 📞 +91 9289344726."
+            "Sorry, something went wrong. Please try again or call 📞 9283344726."
         )

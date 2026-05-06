@@ -62,7 +62,7 @@ def _format_result(places: list, index: int, name: str, city: str, user_id, sess
         return (
             f"*{name}* {city} mein Google par nahi mila. 😕\n\n"
             f"Aapka business listed nahi hai abhi tak. Limbu.ai GMB profile bana sakta hai — ₹3,000 one-time.\n\n"
-            f"Jaanna chahte hain? 📞 "
+            f"Jaanna chahte hain? 📞 9283344726"
         )
 
     place = places[index]
