@@ -99,35 +99,102 @@ def handle_feature(user_id: str, session: dict, feature_type: str) -> str:
         )
 
 
+# City aliases — handle different spellings
+_CITY_ALIASES = {
+    "gurgaon": ["gurugram", "gurgaon"],
+    "gurugram": ["gurugram", "gurgaon"],
+    "bangalore": ["bengaluru", "bangalore"],
+    "bengaluru": ["bengaluru", "bangalore"],
+    "bombay": ["mumbai", "bombay"],
+    "mumbai": ["mumbai", "bombay"],
+    "calcutta": ["kolkata", "calcutta"],
+    "kolkata": ["kolkata", "calcutta"],
+    "prayagraj": ["allahabad", "prayagraj"],
+    "allahabad": ["allahabad", "prayagraj"],
+    "mysuru": ["mysore", "mysuru"],
+    "mysore": ["mysore", "mysuru"],
+}
+
+
+def _city_match_advanced(confirmed_city: str, biz_locality: str, biz_address: str) -> bool:
+    """Match city with alias support (gurgaon=gurugram, bangalore=bengaluru etc.)"""
+    c = confirmed_city.lower().strip()
+    loc = biz_locality.lower()
+    addr = biz_address.lower()
+    if not c:
+        return False
+    if c in loc or loc in c or c in addr:
+        return True
+    for alias in _CITY_ALIASES.get(c, []):
+        if alias in loc or alias in addr:
+            return True
+    return False
+
+
 def _get_location_resource_name(session: dict) -> str:
     """
-    Get locationResourceName from connected businesses.
-    Matches the confirmed business first, then falls back to first in list.
+    Get locationResourceName — matches by name + city/address for accuracy.
+    When multiple same-name businesses exist, city match is critical.
     API expects format: 'locations/913426026493879201'
     """
     businesses = session.get("connected_businesses", [])
     if not businesses:
         return ""
 
-    # Try to match confirmed business by name
-    confirmed_name = ""
+    # 1. active_location_id takes highest priority (user explicitly switched)
+    active_id = session.get("active_location_id", "")
+    if active_id:
+        # Verify it exists in businesses list
+        for b in businesses:
+            loc = b.get("locationResourceName", "") or b.get("locationId", "") or b.get("id", "")
+            if loc == active_id:
+                print(f"[Feature] Using active business '{b['title']}' → {loc}")
+                return loc
+
+    # 2. Match by name + city from confirmed search
     found_place = session.get("found_place", {})
-    if found_place:
-        confirmed_name = found_place.get("displayName", {}).get("text", "") or \
-                        session.get("business_name", "")
+    confirmed_name = found_place.get("displayName", {}).get("text", "") or session.get("business_name", "")
+    confirmed_city = session.get("city", "").lower()
+    confirmed_address = found_place.get("formattedAddress", "").lower()
 
     if confirmed_name:
         confirmed_lower = confirmed_name.lower().strip()
+
+        # First pass: name + city match
+        if confirmed_city:
+            for b in businesses:
+                biz_title = b.get("title", "").lower().strip()
+                biz_locality = b.get("locality", "").lower()
+                biz_address = b.get("address", "").lower()
+                name_match = (biz_title == confirmed_lower or
+                              confirmed_lower in biz_title or
+                              biz_title in confirmed_lower)
+                city_match = _city_match_advanced(confirmed_city, biz_locality, biz_address)
+                if name_match and city_match:
+                    loc = b.get("locationResourceName", "") or b.get("locationId", "") or b.get("id", "")
+                    if loc:
+                        print(f"[Feature] Matched by name+city '{b['title']}' ({b.get('locality','')}) → {loc}")
+                        return loc
+
+        # Second pass: name only (if city didn't match)
         for b in businesses:
             biz_title = b.get("title", "").lower().strip()
             if biz_title == confirmed_lower or confirmed_lower in biz_title or biz_title in confirmed_lower:
                 loc = b.get("locationResourceName", "") or b.get("locationId", "") or b.get("id", "")
                 if loc:
-                    print(f"[Feature] Matched business '{b['title']}' → {loc}")
+                    print(f"[Feature] Matched by name only '{b['title']}' → {loc}")
                     return loc
 
-    # Fallback to first business
+    # 3. Fallback to first verified business
+    for b in businesses:
+        if b.get("verified"):
+            loc = b.get("locationResourceName", "") or b.get("locationId", "") or b.get("id", "")
+            if loc:
+                print(f"[Feature] Fallback to first verified '{b.get('title','')}' → {loc}")
+                return loc
+
+    # 4. Absolute fallback
     b = businesses[0]
     loc = b.get("locationResourceName", "") or b.get("locationId", "") or b.get("id", "")
-    print(f"[Feature] Fallback to first business '{b.get('title','')}' → {loc}")
+    print(f"[Feature] Absolute fallback '{b.get('title','')}' → {loc}")
     return loc

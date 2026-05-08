@@ -56,6 +56,83 @@ def _llm_reply(user_id: str, instruction: str) -> str:
     return reply
 
 
+# ── Template name → context mapping ─────────────────────────────
+TEMPLATE_CONTEXTS = {
+    "franchise_msg": {
+        "type": "franchise",
+        "interested_reply": "Bahut achha! Limbu.ai franchise mein interested hain aap!\n\nHamare team member aapko jald call karega.\nYa abhi call karein: 9283344726",
+        "not_interested_reply": "Koi baat nahi! Agar kabhi consider karna ho to 9283344726 pe contact kar sakte hain.",
+    },
+    "demo_session_confirmation": {
+        "type": "demo",
+        "interested_reply": "Demo confirm ho gaya! Hamar team aapke scheduled time par aayega. Koi sawal: 9283344726",
+        "not_interested_reply": "Koi baat nahi! Reschedule ke liye 9283344726 pe call karein.",
+    },
+    "copy_of_service_availability_response_new": {
+        "type": "service",
+        "interested_reply": "Service confirm ho gayi! Hamar technician jald aayega. Tracking: 9283344726",
+        "not_interested_reply": "Theek hai! Baad mein service chahiye to 9283344726 pe call karein.",
+    },
+    "service_availability_response_new": {
+        "type": "service",
+        "interested_reply": "Service confirmed! Our technician will arrive shortly. Contact: 9283344726",
+        "not_interested_reply": "No problem! Call us at 9283344726 whenever you need service.",
+    },
+    "vendor_service_availability": {
+        "type": "service",
+        "interested_reply": "Service confirmed! Our team will reach you soon. 9283344726",
+        "not_interested_reply": "Understood! Contact us at 9283344726 whenever needed.",
+    },
+    "welcome_msg": {
+        "type": "welcome",
+        "interested_reply": "Namaste! Limbu.ai mein aapka swagat hai!\n\nMain Priya hoon. Apna business naam aur city batayein! 😊",
+        "not_interested_reply": "Theek hai! Agar kabhi help chahiye to wapas aa sakte hain. 😊",
+    },
+    "call_back": {
+        "type": "callback",
+        "interested_reply": "Callback registered! Hamar team jald call karega. 9283344726",
+        "not_interested_reply": "Theek hai! Zaroorat ho to 9283344726 pe call karein.",
+    },
+    "callback_later_after_call": {
+        "type": "callback",
+        "interested_reply": "Callback scheduled! We will call you back shortly. 9283344726",
+        "not_interested_reply": "Alright! Feel free to call us at 9283344726 anytime.",
+    },
+    "call_not_picked_followup": {
+        "type": "callback",
+        "interested_reply": "Got it! Our team will call you back soon. 9283344726",
+        "not_interested_reply": "No problem! Reach us at 9283344726 when convenient.",
+    },
+}
+
+
+# ── Template button → intent mapping ────────────────────────────
+# When user clicks a WhatsApp template button, map to standard intent
+TEMPLATE_BUTTON_INTENTS = {
+    # Positive / interested
+    "interested": "INTERESTED",
+    "i am intrested": "INTERESTED",
+    "intrested": "INTERESTED",
+    "confirm now": "INTERESTED",
+    "call me back": "CALLBACK",
+    "request call back": "CALLBACK",
+    "call me later": "CALLBACK",
+    "need support": "SUPPORT",
+    "contact support": "SUPPORT",
+    # Negative
+    "not interested": "NOT_INTERESTED",
+    "not intrested": "NOT_INTERESTED",
+    "connect later": "NOT_INTERESTED",
+    "call later": "NOT_INTERESTED",
+    "remind me later": "NOT_INTERESTED",
+}
+
+
+def get_template_button_intent(btn_text: str) -> str:
+    """Returns intent for template button click, or empty string if not a button"""
+    return TEMPLATE_BUTTON_INTENTS.get(btn_text.lower().strip(), "")
+
+
 # ── Keywords ──────────────────────────────────────────────────────
 YES_WORDS = {
     "yes", "haan", "han", "ha", "haa", "confirmed", "confirm",
@@ -338,7 +415,92 @@ def entry_node(state: ChatState) -> ChatState:
     session = get_session(user_id)
     msg_lower = message.lower().strip()
 
-    # Language detection
+    # ── Template button click handling (HIGHEST PRIORITY) ────────
+    btn_intent = get_template_button_intent(message)
+    if btn_intent:
+        print(f"[Graph] Template button: '{message}' → intent={btn_intent}")
+        session["greeted"] = True
+        save_session(user_id, session)
+
+        # Get template-specific context if available
+        last_template = session.get("last_template", "")
+        template_ctx = TEMPLATE_CONTEXTS.get(last_template, {})
+        template_type = template_ctx.get("type", "")
+        print(f"[Graph] Template context: {last_template} → type={template_type}")
+
+        if btn_intent == "INTERESTED":
+            # Use template-specific reply if available
+            if template_ctx.get("interested_reply"):
+                reply = template_ctx["interested_reply"]
+                # For welcome/GMB templates, continue with normal flow
+                if template_type == "welcome":
+                    state["raw_reply"] = reply
+                    state["action"] = "RESPOND"
+                    return state
+                elif template_type in ("franchise", "demo", "service", "callback"):
+                    state["raw_reply"] = reply
+                    state["action"] = "RESPOND"
+                    return state
+
+            # Default: if connected show features, else ask business
+            if session.get("connect_verified"):
+                offered = session.get("features_offered", [])
+                for feat in FEATURE_SEQUENCE:
+                    if feat not in offered:
+                        state["action"] = "FEATURE"
+                        state["feature_type"] = feat
+                        return state
+            elif session.get("confirmed"):
+                state["action"] = "CONNECT_BUSINESS"
+                return state
+            else:
+                reply = _llm_reply(
+                    user_id,
+                    "User ne 'Interested' button click kiya hai Limbu.ai template mein. "
+                    "Warmly welcome karo aur poocho unka business naam aur city kya hai. "
+                    "Introduce yourself as Priya from Limbu.ai."
+                )
+                state["raw_reply"] = reply
+                state["action"] = "RESPOND"
+                return state
+
+        elif btn_intent == "NOT_INTERESTED":
+            if template_ctx.get("not_interested_reply"):
+                reply = template_ctx["not_interested_reply"]
+            else:
+                reply = _llm_reply(
+                    user_id,
+                    "User ne 'Not Interested' ya 'Remind Me Later' click kiya. "
+                    "Politely acknowledge karo, koi pressure nahi. "
+                    "Batao ki agar kabhi zaroorat ho to wapas aa sakte hain: 9283344726"
+                )
+            state["raw_reply"] = reply
+            state["action"] = "RESPOND"
+            return state
+
+        elif btn_intent == "CALLBACK":
+            reply = _llm_reply(
+                user_id,
+                "User ne callback request kiya hai. "
+                "Confirm karo ki hamar team jald call karega. "
+                "Contact: 9283344726"
+            )
+            state["raw_reply"] = reply
+            state["action"] = "RESPOND"
+            return state
+
+        elif btn_intent == "SUPPORT":
+            reply = _llm_reply(
+                user_id,
+                "User ko support chahiye. "
+                "Poocho kya problem hai aur batao: "
+                "📞 9283344726 | info@limbu.ai"
+            )
+            state["raw_reply"] = reply
+            state["action"] = "RESPOND"
+            return state
+
+    # ── Language detection
     current_lang = session.get("lang", "hi")
     lang = _detect_lang(message, current_lang)
     if lang != current_lang:

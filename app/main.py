@@ -204,6 +204,74 @@ async def webhook_whatsapp(request: Request):
     return result
 
 
+@app.post("/webhook/template-sent-bulk")
+async def webhook_template_sent_bulk(request: Request):
+    """
+    Bulk version — called when same template sent to 1000+ users at once.
+    Payload: { template_name, phones: ["91XXX", "91YYY", ...] }
+    """
+    try:
+        body = await request.json()
+        template_name = body.get("template_name", "")
+        phones = body.get("phones", [])
+
+        if not template_name or not phones:
+            return {"status": "error", "detail": "template_name and phones required"}
+
+        from app.services.redis_service import get_session, save_session
+        updated = 0
+        for phone in phones:
+            try:
+                phone = str(phone).replace("+", "").replace(" ", "")
+                user_id = f"wa_{phone}"
+                session = get_session(user_id)
+                session["last_template"] = template_name
+                session["greeted"] = True
+                save_session(user_id, session)
+                updated += 1
+            except Exception:
+                pass
+
+        print(f"[Template Bulk] {template_name} → {updated}/{len(phones)} users updated")
+        return {"status": "ok", "template": template_name, "updated": updated, "total": len(phones)}
+
+    except Exception as e:
+        print(f"[Template Bulk] Error: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
+@app.post("/webhook/template-sent")
+async def webhook_template_sent(request: Request):
+    """
+    Called by Limbu backend when a WhatsApp template is sent to a user.
+    Save template context in session so chatbot knows which template user saw.
+    Payload: { phone, template_name, variables: {...} }
+    """
+    try:
+        body = await request.json()
+        phone = body.get("phone", "").replace("+", "").replace(" ", "")
+        template_name = body.get("template_name", "")
+        variables = body.get("variables", {})
+
+        if not phone or not template_name:
+            return {"status": "error", "detail": "phone and template_name required"}
+
+        user_id = f"wa_{phone}" if not phone.startswith("wa_") else phone
+        from app.services.redis_service import get_session, save_session
+        session = get_session(user_id)
+        session["last_template"] = template_name
+        session["last_template_vars"] = variables
+        session["greeted"] = True  # User already received a message
+        save_session(user_id, session)
+
+        print(f"[Template] Saved: user={user_id} template={template_name}")
+        return {"status": "ok", "user_id": user_id, "template": template_name}
+
+    except Exception as e:
+        print(f"[Template] Error: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
 @app.post("/webhook/action-complete")
 async def webhook_action_complete(request: Request):
     """
