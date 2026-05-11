@@ -9,6 +9,7 @@ from app.nodes.search import handle_search, handle_next_result
 from app.nodes.analyse import handle_analyse
 from app.nodes.booking import handle_booking
 from app.nodes.connect import handle_connect_link, handle_check_latest_connection, handle_check_email
+from app.nodes.social_connect import handle_social_connect_link, handle_check_social_connection
 from app.nodes.features import handle_feature, FEATURE_SEQUENCE
 from app.services.limbu_api import check_user_by_phone
 from app.services.redis_service import save_message, get_session, save_session, get_history
@@ -60,28 +61,28 @@ def _llm_reply(user_id: str, instruction: str) -> str:
 TEMPLATE_CONTEXTS = {
     "franchise_msg": {
         "type": "franchise",
-        "interested_reply": "Bahut achha! Limbu.ai franchise mein interested hain aap!\n\nHamare team member aapko jald call karega.\nYa abhi call karein: 9283344726",
-        "not_interested_reply": "Koi baat nahi! Agar kabhi consider karna ho to 9283344726 pe contact kar sakte hain.",
+        "interested_reply": "Bahut achha! Limbu.ai franchise mein interested hain aap!\n\nHamare team member aapko jald call karega.\nYa abhi call karein: +91 9289344726",
+        "not_interested_reply": "Koi baat nahi! Agar kabhi consider karna ho to +91 +91 9289344726 pe contact kar sakte hain.",
     },
     "demo_session_confirmation": {
         "type": "demo",
-        "interested_reply": "Demo confirm ho gaya! Hamar team aapke scheduled time par aayega. Koi sawal: 9283344726",
-        "not_interested_reply": "Koi baat nahi! Reschedule ke liye 9283344726 pe call karein.",
+        "interested_reply": "Demo confirm ho gaya! Hamar team aapke scheduled time par aayega. Koi sawal: +91 9289344726",
+        "not_interested_reply": "Koi baat nahi! Reschedule ke liye +91 9289344726 pe call karein.",
     },
     "copy_of_service_availability_response_new": {
         "type": "service",
-        "interested_reply": "Service confirm ho gayi! Hamar technician jald aayega. Tracking: 9283344726",
-        "not_interested_reply": "Theek hai! Baad mein service chahiye to 9283344726 pe call karein.",
+        "interested_reply": "Service confirm ho gayi! Hamar technician jald aayega. Tracking: +91 9289344726",
+        "not_interested_reply": "Theek hai! Baad mein service chahiye to +91 9289344726 pe call karein.",
     },
     "service_availability_response_new": {
         "type": "service",
-        "interested_reply": "Service confirmed! Our technician will arrive shortly. Contact: 9283344726",
-        "not_interested_reply": "No problem! Call us at 9283344726 whenever you need service.",
+        "interested_reply": "Service confirmed! Our technician will arrive shortly. Contact: +91 9289344726",
+        "not_interested_reply": "No problem! Call us at +91 9289344726 whenever you need service.",
     },
     "vendor_service_availability": {
         "type": "service",
-        "interested_reply": "Service confirmed! Our team will reach you soon. 9283344726",
-        "not_interested_reply": "Understood! Contact us at 9283344726 whenever needed.",
+        "interested_reply": "Service confirmed! Our team will reach you soon. +91 9289344726",
+        "not_interested_reply": "Understood! Contact us at +91 9289344726 whenever needed.",
     },
     "welcome_msg": {
         "type": "welcome",
@@ -90,18 +91,18 @@ TEMPLATE_CONTEXTS = {
     },
     "call_back": {
         "type": "callback",
-        "interested_reply": "Callback registered! Hamar team jald call karega. 9283344726",
-        "not_interested_reply": "Theek hai! Zaroorat ho to 9283344726 pe call karein.",
+        "interested_reply": "Callback registered! Hamar team jald call karega. +91 9289344726",
+        "not_interested_reply": "Theek hai! Zaroorat ho to +91 9289344726 pe call karein.",
     },
     "callback_later_after_call": {
         "type": "callback",
-        "interested_reply": "Callback scheduled! We will call you back shortly. 9283344726",
-        "not_interested_reply": "Alright! Feel free to call us at 9283344726 anytime.",
+        "interested_reply": "Callback scheduled! We will call you back shortly. +91 9289344726",
+        "not_interested_reply": "Alright! Feel free to call us at +91 9289344726 anytime.",
     },
     "call_not_picked_followup": {
         "type": "callback",
-        "interested_reply": "Got it! Our team will call you back soon. 9283344726",
-        "not_interested_reply": "No problem! Reach us at 9283344726 when convenient.",
+        "interested_reply": "Got it! Our team will call you back soon. +91 9289344726",
+        "not_interested_reply": "No problem! Reach us at +91 9289344726 when convenient.",
     },
 }
 
@@ -472,7 +473,7 @@ def entry_node(state: ChatState) -> ChatState:
                     user_id,
                     "User ne 'Not Interested' ya 'Remind Me Later' click kiya. "
                     "Politely acknowledge karo, koi pressure nahi. "
-                    "Batao ki agar kabhi zaroorat ho to wapas aa sakte hain: 9283344726"
+                    "Batao ki agar kabhi zaroorat ho to wapas aa sakte hain: +91 9289344726"
                 )
             state["raw_reply"] = reply
             state["action"] = "RESPOND"
@@ -483,7 +484,7 @@ def entry_node(state: ChatState) -> ChatState:
                 user_id,
                 "User ne callback request kiya hai. "
                 "Confirm karo ki hamar team jald call karega. "
-                "Contact: 9283344726"
+                "Contact: +91 9289344726"
             )
             state["raw_reply"] = reply
             state["action"] = "RESPOND"
@@ -494,7 +495,7 @@ def entry_node(state: ChatState) -> ChatState:
                 user_id,
                 "User ko support chahiye. "
                 "Poocho kya problem hai aur batao: "
-                "📞 9283344726 | info@limbu.ai"
+                "📞 +91 9289344726 | info@limbu.ai"
             )
             state["raw_reply"] = reply
             state["action"] = "RESPOND"
@@ -532,6 +533,19 @@ def entry_node(state: ChatState) -> ChatState:
     if not session.get("connect_verified"):
         if any(w in msg_lower for w in ALREADY_CONNECTED_WORDS):
             state["action"] = "CHECK_LATEST_CONNECTION"
+            return state
+
+    # ── PRIORITY: Social media connect check ──────────────────────
+    social_connected_words = {
+        "facebook connected", "fb connected", "instagram connected",
+        "insta connected", "social connected", "facebook ho gaya",
+        "instagram ho gaya", "fb ho gaya"
+    }
+    for w in social_connected_words:
+        if w in msg_lower:
+            platform = "facebook" if "facebook" in w or "fb" in w else "instagram"
+            state["action"] = "CHECK_SOCIAL_CONNECTION"
+            state["feature_type"] = platform
             return state
 
     # ── PRIORITY: Wrong business ──────────────────────────────────
@@ -670,6 +684,17 @@ def entry_node(state: ChatState) -> ChatState:
             "website": "website", "site": "website",
             "review reply": "review_reply", "review": "review_reply"
         }
+
+        # Social media connect keywords
+        social_keywords = {
+            "facebook": "facebook", "fb": "facebook", "facebook page": "facebook",
+            "instagram": "instagram", "insta": "instagram", "ig": "instagram",
+        }
+        for keyword, platform in social_keywords.items():
+            if keyword in msg_lower and not session.get(f"{platform}_verified"):
+                state["action"] = "SOCIAL_CONNECT"
+                state["feature_type"] = platform
+                return state
         if is_yes(message):
             offered = session.get("features_offered", [])
             for feat in FEATURE_SEQUENCE:
@@ -901,6 +926,26 @@ def node_check_user(state: ChatState) -> ChatState:
     return state
 
 
+def node_social_connect(state: ChatState) -> ChatState:
+    user_id = state["user_id"]
+    session = get_session(user_id)
+    platform = state.get("feature_type", "facebook")
+    reply = handle_social_connect_link(user_id, session, platform)
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
+    return state
+
+
+def node_check_social_connection(state: ChatState) -> ChatState:
+    user_id = state["user_id"]
+    session = get_session(user_id)
+    platform = state.get("feature_type", "facebook")
+    reply = handle_check_social_connection(user_id, session, platform)
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
+    return state
+
+
 def router(state: ChatState) -> str:
     return state.get("action", "RESPOND")
 
@@ -919,6 +964,8 @@ def build_graph():
     graph.add_node("feature", node_feature)
     graph.add_node("book_demo", node_book_demo)
     graph.add_node("check_user", node_check_user)
+    graph.add_node("social_connect", node_social_connect)
+    graph.add_node("check_social_connection", node_check_social_connection)
     graph.set_entry_point("entry")
     graph.add_conditional_edges("entry", router, {
         "RESPOND": "respond",
@@ -932,10 +979,13 @@ def build_graph():
         "FEATURE": "feature",
         "BOOK_DEMO": "book_demo",
         "CHECK_USER": "check_user",
+        "SOCIAL_CONNECT": "social_connect",
+        "CHECK_SOCIAL_CONNECTION": "check_social_connection",
     })
     for node in ["respond", "confirmed", "search_business", "next_result", "analyse",
                  "connect_business", "check_latest_connection", "check_business_email",
-                 "feature", "book_demo", "check_user"]:
+                 "feature", "book_demo", "check_user",
+                 "social_connect", "check_social_connection"]:
         graph.add_edge(node, END)
     return graph.compile()
 
@@ -950,5 +1000,5 @@ def chat(user_id: str, message: str) -> str:
         result = app_graph.invoke({"user_id": user_id, "message": message})
         return result.get(
             "response",
-            "Sorry, something went wrong. Please try again or call 📞 9283344726."
+            "Sorry, something went wrong. Please try again or call 📞 +91 9289344726."
         )

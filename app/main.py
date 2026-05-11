@@ -103,6 +103,49 @@ def _extract_template_button_text(body: dict) -> str:
     return ""
 
 
+async def _process_template_button(body: dict) -> dict:
+    """Handle template_button_reply event"""
+    try:
+        contact = _parse_field(body.get("contact") or {})
+        phone_raw = str(contact.get("phone") or body.get("phone") or "").strip()
+        phone_norm = phone_raw.replace("+", "").replace(" ", "").replace("-", "")
+        if not phone_norm:
+            return {"status": "error", "detail": "no phone"}
+
+        user_id = f"wa_{phone_norm}"
+        template_name = body.get("template_name", "")
+        button_text = body.get("button_text", "") or body.get("button_payload", "")
+        template_body = _parse_field(body.get("template") or {}).get("body", "")
+
+        print(f"[Template Button] user={user_id} template={template_name} button={button_text}")
+
+        # Save template context in session
+        from app.services.redis_service import get_session, save_session
+        session = get_session(user_id)
+        session["last_template"] = template_name
+        session["last_template_body"] = template_body
+        session["greeted"] = True
+        session["connect_phone"] = phone_norm
+        if not session.get("lang"):
+            session["lang"] = "hi"
+        save_session(user_id, session)
+
+        # Process button as normal message — graph handles it
+        from app.graph import chat
+        response = chat(user_id, button_text)
+
+        if phone_norm and response:
+            from app.services.whatsapp_service import send_whatsapp
+            send_whatsapp(phone_norm, response)
+
+        return {"status": "ok", "template": template_name, "button": button_text}
+
+    except Exception as e:
+        print(f"[Template Button] Error: {e}")
+        import traceback; traceback.print_exc()
+        return {"status": "error", "detail": str(e)}
+
+
 async def _process_chat(body: dict, headers) -> dict:
     """
     Parse WhatsApp webhook. Exact format:
@@ -114,6 +157,11 @@ async def _process_chat(body: dict, headers) -> dict:
     contact/message may be dict OR stringified dict string.
     """
     print(f"[Webhook] Incoming: {str(body)[:200]}")
+
+    # ── Route by event type ───────────────────────────────────────
+    event = body.get("event", "")
+    if event == "template_button_reply":
+        return await _process_template_button(body)
 
     # ── Dedup by wamid — prevent double processing ────────────────
     from app.graph import _is_duplicate
@@ -202,74 +250,6 @@ async def webhook_whatsapp(request: Request):
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
-
-
-@app.post("/webhook/template-sent-bulk")
-async def webhook_template_sent_bulk(request: Request):
-    """
-    Bulk version — called when same template sent to 1000+ users at once.
-    Payload: { template_name, phones: ["91XXX", "91YYY", ...] }
-    """
-    try:
-        body = await request.json()
-        template_name = body.get("template_name", "")
-        phones = body.get("phones", [])
-
-        if not template_name or not phones:
-            return {"status": "error", "detail": "template_name and phones required"}
-
-        from app.services.redis_service import get_session, save_session
-        updated = 0
-        for phone in phones:
-            try:
-                phone = str(phone).replace("+", "").replace(" ", "")
-                user_id = f"wa_{phone}"
-                session = get_session(user_id)
-                session["last_template"] = template_name
-                session["greeted"] = True
-                save_session(user_id, session)
-                updated += 1
-            except Exception:
-                pass
-
-        print(f"[Template Bulk] {template_name} → {updated}/{len(phones)} users updated")
-        return {"status": "ok", "template": template_name, "updated": updated, "total": len(phones)}
-
-    except Exception as e:
-        print(f"[Template Bulk] Error: {e}")
-        return {"status": "error", "detail": str(e)}
-
-
-@app.post("/webhook/template-sent")
-async def webhook_template_sent(request: Request):
-    """
-    Called by Limbu backend when a WhatsApp template is sent to a user.
-    Save template context in session so chatbot knows which template user saw.
-    Payload: { phone, template_name, variables: {...} }
-    """
-    try:
-        body = await request.json()
-        phone = body.get("phone", "").replace("+", "").replace(" ", "")
-        template_name = body.get("template_name", "")
-        variables = body.get("variables", {})
-
-        if not phone or not template_name:
-            return {"status": "error", "detail": "phone and template_name required"}
-
-        user_id = f"wa_{phone}" if not phone.startswith("wa_") else phone
-        from app.services.redis_service import get_session, save_session
-        session = get_session(user_id)
-        session["last_template"] = template_name
-        session["last_template_vars"] = variables
-        session["greeted"] = True  # User already received a message
-        save_session(user_id, session)
-
-        print(f"[Template] Saved: user={user_id} template={template_name}")
-        return {"status": "ok", "user_id": user_id, "template": template_name}
-
-    except Exception as e:
-        print(f"[Template] Error: {e}")
-        return {"status": "error", "detail": str(e)}
 
 
 @app.post("/webhook/action-complete")

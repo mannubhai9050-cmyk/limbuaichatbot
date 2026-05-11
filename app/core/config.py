@@ -33,6 +33,26 @@ CHATBOT_ACTION_RESULT_API = os.getenv(
     "https://limbu.ai/api/chatbot/action/result"
 )
 
+# ── Social Media Connect ─────────────────────────────────────────
+LIMBU_SOCIAL_CONNECT_URL = "https://limbu.ai/connect-business"
+LIMBU_META_STATUS_API = "https://limbu.ai/api/chatbot/meta-connection"
+ 
+# Supported platforms: facebook, instagram
+SOCIAL_PLATFORMS = {
+    "facebook": {
+        "name": "Facebook",
+        "emoji": "📘",
+        "connect_url": "https://limbu.ai/connect-business?type=meta&source=chatbot&platform=facebook",
+        "status_type": "facebook",
+    },
+    "instagram": {
+        "name": "Instagram",
+        "emoji": "📸",
+        "connect_url": "https://limbu.ai/connect-business?type=meta&source=chatbot&platform=instagram",
+        "status_type": "instagram",
+    },
+}
+ 
 # ── App Settings ──────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 MAX_CHAT_HISTORY = 100       # Keep last 20 messages only
