@@ -39,7 +39,7 @@ def handle_booking(user_id: str, name: str, phone: str, date: str, time: str) ->
             SystemMessage(content=get_main_prompt(session)),
             HumanMessage(content=(
                 "[SYSTEM: Booking failed due to technical error. "
-                "Apologize and ask to call 9283344726. Reply in user's language.]"
+                "Apologize and ask to call +91 9289344726. Reply in user's language.]"
             ))
         ])
         return reply.content.strip()

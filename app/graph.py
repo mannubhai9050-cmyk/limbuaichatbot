@@ -62,7 +62,7 @@ TEMPLATE_CONTEXTS = {
     "franchise_msg": {
         "type": "franchise",
         "interested_reply": "Bahut achha! Limbu.ai franchise mein interested hain aap!\n\nHamare team member aapko jald call karega.\nYa abhi call karein: +91 9289344726",
-        "not_interested_reply": "Koi baat nahi! Agar kabhi consider karna ho to +91 +91 9289344726 pe contact kar sakte hain.",
+        "not_interested_reply": "Koi baat nahi! Agar kabhi consider karna ho to +91 9289344726 pe contact kar sakte hain.",
     },
     "demo_session_confirmation": {
         "type": "demo",
@@ -585,6 +585,42 @@ def entry_node(state: ChatState) -> ChatState:
             state["action"] = _detect_action(reply) if "[ACTION:" in reply else "RESPOND"
             return state
 
+    # ── Social media connect — works anytime, no GMB needed ─────
+    SOCIAL_KEYWORDS = {
+        "facebook": "facebook", "fb page": "facebook", "fb connect": "facebook",
+        "facebook page": "facebook", "facebook connect": "facebook",
+        "instagram": "instagram", "insta": "instagram", "ig connect": "instagram",
+        "instagram page": "instagram", "instagram connect": "instagram",
+        "social media": None,  # Ask which platform
+        "social connect": None,
+        "social media connect": None,
+    }
+    for keyword, platform in SOCIAL_KEYWORDS.items():
+        if keyword in msg_lower:
+            if platform:
+                if not session.get(f"{platform}_verified"):
+                    state["action"] = "SOCIAL_CONNECT"
+                    state["feature_type"] = platform
+                    return state
+            else:
+                # Both platforms - start with facebook
+                if not session.get("facebook_verified"):
+                    state["action"] = "SOCIAL_CONNECT"
+                    state["feature_type"] = "facebook"
+                    return state
+                elif not session.get("instagram_verified"):
+                    state["action"] = "SOCIAL_CONNECT"
+                    state["feature_type"] = "instagram"
+                    return state
+
+    # Check if pending social connect
+    for platform in ["facebook", "instagram"]:
+        if session.get(f"{platform}_link_sent") and not session.get(f"{platform}_verified"):
+            if is_connected_confirm(message):
+                state["action"] = "CHECK_SOCIAL_CONNECTION"
+                state["feature_type"] = platform
+                return state
+
     # ── 1. Connect link sent → check connected ────────────────────
     if session.get("connect_link_sent") and not session.get("connect_verified"):
         if is_connected_confirm(message):
@@ -685,16 +721,7 @@ def entry_node(state: ChatState) -> ChatState:
             "review reply": "review_reply", "review": "review_reply"
         }
 
-        # Social media connect keywords
-        social_keywords = {
-            "facebook": "facebook", "fb": "facebook", "facebook page": "facebook",
-            "instagram": "instagram", "insta": "instagram", "ig": "instagram",
-        }
-        for keyword, platform in social_keywords.items():
-            if keyword in msg_lower and not session.get(f"{platform}_verified"):
-                state["action"] = "SOCIAL_CONNECT"
-                state["feature_type"] = platform
-                return state
+
         if is_yes(message):
             offered = session.get("features_offered", [])
             for feat in FEATURE_SEQUENCE:

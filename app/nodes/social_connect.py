@@ -18,15 +18,14 @@ def _get_phone(user_id: str, session: dict = None) -> str:
 
 
 def handle_social_connect_link(user_id: str, session: dict, platform: str) -> str:
-    """Generate and send social media connect link"""
+    """Generate and send social media connect link — no business name needed"""
     phone = _get_phone(user_id, session)
     lang = session.get("lang", "hi")
     en = (lang == "en")
 
     platform_info = SOCIAL_PLATFORMS.get(platform)
     if not platform_info:
-        return "Invalid platform. Supported: facebook, instagram" if en else \
-               "Invalid platform. Facebook aur Instagram supported hain."
+        return "Invalid platform. Supported: facebook, instagram" if en else                "Invalid platform. Facebook aur Instagram supported hain."
 
     # Build connect URL with phone
     connect_url = f"{platform_info['connect_url']}&phone={phone}" if phone else platform_info['connect_url']
@@ -42,21 +41,17 @@ def handle_social_connect_link(user_id: str, session: dict, platform: str) -> st
     name = platform_info["name"]
 
     if en:
-        reply = (
-            f"{emoji} *Connect your {name} Page*\n\n"
-            f"Click this link to connect:\n"
-            f"🔗 {connect_url}\n\n"
-            f"Login with your {name} account and grant access.\n"
-            f"I'll notify you automatically once connected! 😊"
-        )
+        reply = emoji + " *Connect your " + name + " Page*\n\n"
+        reply += "Click this link:\n"
+        reply += "🔗 " + connect_url + "\n\n"
+        reply += "Login with your " + name + " account and allow access.\n"
+        reply += "I'll notify you automatically once connected! 😊"
     else:
-        reply = (
-            f"{emoji} *{name} Page connect karein*\n\n"
-            f"Is link se connect karein:\n"
-            f"🔗 {connect_url}\n\n"
-            f"Apne {name} account se login karein aur access dein.\n"
-            f"Connect hone ke baad main automatically bataa doongi! 😊"
-        )
+        reply = emoji + " *" + name + " Page connect karein*\n\n"
+        reply += "Is link se connect karein:\n"
+        reply += "🔗 " + connect_url + "\n\n"
+        reply += "Apne " + name + " account se login karein aur access allow karein.\n"
+        reply += "Connect hone ke baad main automatically notify karungi! 😊"
 
     # Start polling
     if phone:
