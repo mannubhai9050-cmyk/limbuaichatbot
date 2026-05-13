@@ -123,14 +123,17 @@ def _build_connected_response(session: dict, platform: str, pages: list) -> str:
 
     if not pages:
         if en:
-            return f"🎉 *{name} connected successfully!*\n\nNo pages found. Please check your account."
-        return f"🎉 *{name} connect ho gaya!*\n\nKoi page nahi mila. Account check karein."
+            return "🎉 *" + name + " connected successfully!*\n\nNo pages found. Please check your account."
+        return "🎉 *" + name + " connect ho gaya!*\n\nKoi page nahi mila. Account check karein."
+
+    # Get correct field names for this platform
+    page_key = platform_info.get("page_key", "pageName")
+    id_key = platform_info.get("id_key", "pageId")
 
     page_lines = []
     for i, p in enumerate(pages, 1):
-        page_name = p.get("pageName", "Page")
-        page_id = p.get("pageId", "")
-        page_lines.append(f"  {i}. *{page_name}*" + (f" (ID: {page_id})" if page_id else ""))
+        page_name = p.get(page_key) or p.get("pageName") or p.get("channelTitle") or "Page"
+        page_lines.append("  " + str(i) + ". *" + page_name + "*")
 
     pages_text = "\n".join(page_lines)
 

@@ -51,7 +51,24 @@ SOCIAL_PLATFORMS = {
         "connect_url": "https://limbu.ai/connect-business?type=meta&source=chatbot&platform=instagram",
         "status_type": "instagram",
     },
+    "youtube": {
+        "name": "YouTube",
+        "emoji": "▶️",
+        "connect_url": "https://limbu.ai/connect-business?type=youtube",
+        "status_type": "youtube",
+        "page_key": "channelTitle",
+        "id_key": "channelId",
+    },
+    "linkedin": {
+        "name": "LinkedIn",
+        "emoji": "💼",
+        "connect_url": "https://limbu.ai/connect-business?type=linkedin",
+        "status_type": "linkedin",
+        "page_key": "pageName",
+        "id_key": "pageId",
+    },
 }
+ 
  
 # ── App Settings ──────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"

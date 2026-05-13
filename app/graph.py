@@ -591,7 +591,11 @@ def entry_node(state: ChatState) -> ChatState:
         "facebook page": "facebook", "facebook connect": "facebook",
         "instagram": "instagram", "insta": "instagram", "ig connect": "instagram",
         "instagram page": "instagram", "instagram connect": "instagram",
-        "social media": None,  # Ask which platform
+        "youtube": "youtube", "yt connect": "youtube", "youtube channel": "youtube",
+        "youtube connect": "youtube",
+        "linkedin": "linkedin", "linked in": "linkedin", "linkedin page": "linkedin",
+        "linkedin connect": "linkedin",
+        "social media": None,
         "social connect": None,
         "social media connect": None,
     }

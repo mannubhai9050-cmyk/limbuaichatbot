@@ -48,13 +48,12 @@ def handle_connect_link(user_id: str, session: dict) -> str:
             return (
                 f"Please use this link to connect your Google Business Profile:\n\n"
                 f"🔗 {LIMBU_CONNECT_URL}\n\n"
-                f"Open the link and sign in with your Gmail.\n"
+                f"Open the link and connect your Business.\n"
                 f"Or call us: 📞 +91 9289344726"
             )
         return (
-            f"Is link se connect karein:\n\n"
+            f"Apna Google Business Profile connect karein:\n\n"
             f"🔗 {LIMBU_CONNECT_URL}\n\n"
-            f"Link khol kar Gmail se login karein.\n"
             f"Ya call karein: 📞 +91 9289344726"
         )
 
@@ -63,13 +62,11 @@ def handle_connect_link(user_id: str, session: dict) -> str:
         return (
             f"Sure! Use this link to connect your Google Business Profile:\n\n"
             f"🔗 {connect_url}\n\n"
-            f"Open the link and sign in with your Gmail to grant access.\n"
             f"I'll notify you automatically once connected! 😊"
         )
     return (
-        f"Ji zaroor! Is link se apna Google Business Profile connect karein:\n\n"
+        f"Ji zaroor! Apna Google Business Profile connect karein:\n\n"
         f"🔗 {connect_url}\n\n"
-        f"Link khol kar apni Gmail se login karein aur access de dein.\n"
         f"Connect hone ke baad main automatically bataa doongi! 😊"
     )
 
@@ -144,44 +141,6 @@ def _build_connected_response(session: dict, locations: list, email: str) -> str
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"Kya main aapki *Full Health Report* nikal doon? (FREE hai) 😊"
     )
-
-
-def handle_check_email(user_id: str, session: dict, email: str) -> str:
-    session["connected_email"] = email
-    save_session(user_id, session)
-    return handle_check_latest_connection(user_id, session)
-
-
-
-def _build_connected_response(session: dict, locations: list, email: str) -> str:
-    """Build response showing all connected businesses"""
-    if not locations:
-        return (
-            f"🎉 *Badhaai ho! Account connect ho gaya!*\n\n"
-            f"Lekin Mujhe {email} se koi bhi Google My Business (GMB) profile linked nahi mili..\n\n"
-            f"Ho sakta hai ki aapka business kisi doosre Gmail account se registered ho..\n"
-            f"Please Sahi Gmail se dobara try karein ya call karein: 📞 +91 9289344726"
-        )
-
-    biz_lines = []
-    for i, b in enumerate(locations, 1):
-        name = b.get("title") or b.get("name") or "Business"
-        address = b.get("address") or ""
-        verified = "✅ Verified" if b.get("verified") else "⚠️ Not Verified"
-        line = f"  {i}. *{name}* — {verified}"
-        if address:
-            line += f"\n     📍 {address}"
-        biz_lines.append(line)
-
-    return (
-        f"🎉 *Badhaai ho! Account connect ho gaya!*\n\n"
-        f"📧 Email: {email}\n\n"
-        f"*Aapke Connected Businesses:*\n"
-        f"{chr(10).join(biz_lines)}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Kya main aapki GMB Profile ki *Full Health Report* nikal doon? (FREE hai) 😊"
-    )
-
 
 def handle_check_email(user_id: str, session: dict, email: str) -> str:
     session["connected_email"] = email

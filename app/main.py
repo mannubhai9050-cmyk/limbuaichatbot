@@ -160,8 +160,29 @@ async def _process_chat(body: dict, headers) -> dict:
 
     # ── Route by event type ───────────────────────────────────────
     event = body.get("event", "")
+
+    # Format 1: event = "template_button_reply" (top-level)
     if event == "template_button_reply":
         return await _process_template_button(body)
+
+    # Format 2: event = "message.received" with message.type = "button"
+    # message has button_text, button_payload, replied_template
+    if event == "message.received":
+        msg_obj = _parse_field(body.get("message") or {})
+        msg_type = msg_obj.get("type", "")
+        if msg_type == "button" and msg_obj.get("button_text"):
+            # Extract template info from replied_template
+            replied_template = _parse_field(msg_obj.get("replied_template") or {})
+            template_body = {
+                "event": "template_button_reply",
+                "template_name": replied_template.get("template_name", ""),
+                "button_text": msg_obj.get("button_text", ""),
+                "button_payload": msg_obj.get("button_payload", ""),
+                "contact": body.get("contact", {}),
+                "template": replied_template,
+            }
+            print(f"[Webhook] Button message detected → routing to template handler")
+            return await _process_template_button(template_body)
 
     # ── Dedup by wamid — prevent double processing ────────────────
     from app.graph import _is_duplicate

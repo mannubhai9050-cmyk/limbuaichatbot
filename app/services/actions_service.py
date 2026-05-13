@@ -102,7 +102,7 @@ def _deliver(user_id: str, phone: str, action: str, result: dict):
         if action == "health_score":
             pdf_url = result.get("pdf_url", "")
             if pdf_url and pdf_url not in final_msg:
-                final_msg += f"\n\n📄 *Full Report (PDF):*\n{pdf_url}"
+                final_msg += f"\n\n📄 *Full Health Report (PDF):*\n{pdf_url}"
 
         elif action == "magic_qr":
             qr_url = result.get("url", "") or result.get("qr_url", "")
