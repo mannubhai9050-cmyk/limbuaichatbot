@@ -102,12 +102,15 @@ def _deliver(user_id: str, phone: str, action: str, result: dict):
         if action == "health_score":
             pdf_url = result.get("pdf_url", "")
             if pdf_url and pdf_url not in final_msg:
-                final_msg += f"\n\n📄 *Full Health Report (PDF):*\n{pdf_url}"
+                final_msg += f"\n\n📄 *Full Report (PDF):*\n{pdf_url}"
 
         elif action == "magic_qr":
             qr_url = result.get("url", "") or result.get("qr_url", "")
+            review_url = result.get("reviewUrl", "") or result.get("review_url", "")
+            if review_url and review_url not in final_msg:
+                final_msg += f"\n\n⭐ *Google Review Link:*\n{review_url}"
             if qr_url and qr_url not in final_msg:
-                final_msg += f"\n\n🔮 *QR Code Image:*\n{qr_url}"
+                final_msg += f"\n\n🔮 *QR Card (Download & Print):*\n{qr_url}"
 
         elif action == "insights":
             pdf_url = result.get("pdfUrl", "") or result.get("pdf_url", "")
@@ -129,6 +132,10 @@ def _deliver(user_id: str, phone: str, action: str, result: dict):
             send_whatsapp(wa_phone, next_offer)
 
         print(f"[Poll] Delivered {action} to {user_id}")
+
+        # Schedule follow-up for next feature
+        from app.services.followup_service import on_feature_delivered
+        on_feature_delivered(user_id, wa_phone, action)
 
     except Exception as e:
         print(f"[Poll] Deliver error: {e}")

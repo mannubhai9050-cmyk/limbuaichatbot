@@ -110,22 +110,36 @@ TEMPLATE_CONTEXTS = {
 # ── Template button → intent mapping ────────────────────────────
 # When user clicks a WhatsApp template button, map to standard intent
 TEMPLATE_BUTTON_INTENTS = {
+    # Chat / engage
+    "chat now": "CHAT",
+    "chat": "CHAT",
+    "start chat": "CHAT",
+    "continue": "CHAT",
     # Positive / interested
     "interested": "INTERESTED",
     "i am intrested": "INTERESTED",
     "intrested": "INTERESTED",
     "confirm now": "INTERESTED",
+    "confirm": "INTERESTED",
+    "accept": "INTERESTED",
+    "yes": "INTERESTED",
+    # Callback
     "call me back": "CALLBACK",
     "request call back": "CALLBACK",
     "call me later": "CALLBACK",
+    # Support
     "need support": "SUPPORT",
     "contact support": "SUPPORT",
+    "support": "SUPPORT",
+    "help": "SUPPORT",
     # Negative
     "not interested": "NOT_INTERESTED",
     "not intrested": "NOT_INTERESTED",
     "connect later": "NOT_INTERESTED",
     "call later": "NOT_INTERESTED",
     "remind me later": "NOT_INTERESTED",
+    "reject": "NOT_INTERESTED",
+    "no": "NOT_INTERESTED",
 }
 
 
@@ -244,6 +258,26 @@ def _detect_lang(message: str, current_lang: str = "hi") -> str:
     if en_count >= max(2, total * 0.4): return "en"
     if hi_count >= max(2, total * 0.3): return "hi"
     return current_lang
+
+
+def _extract_maps_url(message: str) -> str:
+    """
+    Detect Google Maps URLs in message.
+    Handles: maps.app.goo.gl, maps.google.com, google.com/maps
+    Returns the URL if found, empty string otherwise.
+    """
+    import re as _re
+    patterns = [
+        r'https?://maps\.app\.goo\.gl/\S+',
+        r'https?://maps\.google\.com/\S+',
+        r'https?://www\.google\.com/maps/\S+',
+        r'https?://goo\.gl/maps/\S+',
+    ]
+    for pattern in patterns:
+        match = _re.search(pattern, message)
+        if match:
+            return match.group(0).rstrip('.,!?)')
+    return ""
 
 
 def _try_extract_business(message: str, session: dict):
@@ -389,6 +423,9 @@ def start_connection_polling(user_id: str, phone: str):
                     save_message(user_id, "assistant", reply)
                     from app.services.whatsapp_service import send_whatsapp
                     send_whatsapp(phone, reply)
+                    # Schedule feature follow-ups
+                    from app.services.followup_service import on_connected
+                    on_connected(user_id, phone)
                     print(f"[ConnPoll] Connected! user={user_id} email={email}")
                     break
             except Exception as e:
@@ -416,6 +453,10 @@ def entry_node(state: ChatState) -> ChatState:
     session = get_session(user_id)
     msg_lower = message.lower().strip()
 
+    # Cancel any pending follow-up — user is active
+    from app.services.followup_service import on_user_message
+    on_user_message(user_id)
+
     # ── Template button click handling (HIGHEST PRIORITY) ────────
     btn_intent = get_template_button_intent(message)
     if btn_intent:
@@ -429,7 +470,19 @@ def entry_node(state: ChatState) -> ChatState:
         template_type = template_ctx.get("type", "")
         print(f"[Graph] Template context: {last_template} → type={template_type}")
 
-        if btn_intent == "INTERESTED":
+        if btn_intent == "CHAT":
+            # User clicked "Chat Now" — greet and ask how to help
+            reply = _llm_reply(
+                user_id,
+                "User ne 'Chat Now' button click kiya hai Limbu.ai template mein. "
+                "Warmly greet karo — 'Main yahi hoon!' type se. "
+                "Poocho kya help chahiye: feature, plan, ya koi sawaal?"
+            )
+            state["raw_reply"] = reply
+            state["action"] = "RESPOND"
+            return state
+
+        elif btn_intent == "INTERESTED":
             # Use template-specific reply if available
             if template_ctx.get("interested_reply"):
                 reply = template_ctx["interested_reply"]
@@ -747,7 +800,14 @@ def entry_node(state: ChatState) -> ChatState:
             state["action"] = "CHECK_BUSINESS_EMAIL"
             return state
 
-    # ── 7. Business + city ────────────────────────────────────────
+    # ── 7a. Google Maps URL → extract place and analyse ──────────
+    maps_url = _extract_maps_url(message)
+    if maps_url:
+        state["raw_reply"] = maps_url
+        state["action"] = "SEARCH_BY_URL"
+        return state
+
+    # ── 7b. Business + city ───────────────────────────────────────
     smart = _try_extract_business(message, session)
     if smart:
         state["raw_reply"] = smart
@@ -852,6 +912,9 @@ def node_connect_business(state: ChatState) -> ChatState:
     phone = session.get("connect_phone", "")
     if phone:
         start_connection_polling(user_id, phone)
+        # Schedule follow-up if user doesn't connect in 7 min
+        from app.services.followup_service import on_connect_link_sent
+        on_connect_link_sent(user_id, phone)
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -957,6 +1020,87 @@ def node_check_user(state: ChatState) -> ChatState:
     return state
 
 
+def node_search_by_url(state: ChatState) -> ChatState:
+    """Handle Google Maps URL — fetch place details and show to user"""
+    user_id = state["user_id"]
+    session = get_session(user_id)
+    url = state.get("raw_reply", "")
+    lang = session.get("lang", "hi")
+
+    try:
+        import httpx as _httpx
+        # Resolve short URL if needed
+        resolved_url = url
+        if "goo.gl" in url or "maps.app.goo.gl" in url:
+            try:
+                with _httpx.Client(timeout=10, follow_redirects=True) as c:
+                    r = c.get(url)
+                    resolved_url = str(r.url)
+            except Exception:
+                pass
+
+        # Extract CID or place_id from URL
+        import re as _re
+        cid_match = _re.search(r'cid=(\d+)', resolved_url)
+        place_id_match = _re.search(r'place_id=([A-Za-z0-9_-]+)', resolved_url)
+        query_match = _re.search(r'/place/([^/@]+)', resolved_url)
+
+        from app.services.google_places import search_places
+        places = []
+
+        if query_match:
+            query = query_match.group(1).replace('+', ' ').replace('%20', ' ')
+            places = search_places(query, "", page_size=1)
+        elif cid_match:
+            cid = cid_match.group(1)
+            places = search_places(f"cid:{cid}", "", page_size=1)
+
+        if places:
+            place = places[0]
+            name = place.get("displayName", {}).get("text", "Business")
+            address = place.get("formattedAddress", "")
+            rating = place.get("rating", 0)
+            reviews = place.get("userRatingCount", 0)
+            maps_uri = place.get("googleMapsUri", resolved_url)
+
+            session["found_place"] = place
+            session["search_places"] = places
+            session["result_index"] = 0
+            session["business_name"] = name
+            save_session(user_id, session)
+
+            if lang == "en":
+                reply = "Found this business from your link:\n\n"
+                reply += "🏪 *" + name + "*\n"
+                reply += "📍 " + address + "\n"
+                reply += "⭐ " + str(rating) + "/5 (" + str(reviews) + " reviews)\n"
+                reply += "🔗 " + maps_uri + "\n\n"
+                reply += "Is this your business?"
+            else:
+                reply = "Aapke link se yeh mila:\n\n"
+                reply += "🏪 *" + name + "*\n"
+                reply += "📍 " + address + "\n"
+                reply += "⭐ " + str(rating) + "/5 (" + str(reviews) + " reviews)\n"
+                reply += "🔗 " + maps_uri + "\n\n"
+                reply += "Kya yeh aapka business hai?"
+        else:
+            if lang == "en":
+                reply = "I couldn't find the business from this link. Please share your business name and city directly."
+            else:
+                reply = "Is link se business nahi mila. Kripya business naam aur city directly batayein."
+
+    except Exception as e:
+        print(f"[SearchByURL] Error: {e}")
+        if lang == "en":
+            reply = "Couldn't process this link. Please share your business name and city."
+        else:
+            reply = "Link process nahi ho saka. Business naam aur city batayein."
+
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
+    return state
+
+
 def node_social_connect(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
@@ -995,6 +1139,7 @@ def build_graph():
     graph.add_node("feature", node_feature)
     graph.add_node("book_demo", node_book_demo)
     graph.add_node("check_user", node_check_user)
+    graph.add_node("search_by_url", node_search_by_url)
     graph.add_node("social_connect", node_social_connect)
     graph.add_node("check_social_connection", node_check_social_connection)
     graph.set_entry_point("entry")
@@ -1010,13 +1155,15 @@ def build_graph():
         "FEATURE": "feature",
         "BOOK_DEMO": "book_demo",
         "CHECK_USER": "check_user",
+        "SEARCH_BY_URL": "search_by_url",
         "SOCIAL_CONNECT": "social_connect",
         "CHECK_SOCIAL_CONNECTION": "check_social_connection",
     })
     for node in ["respond", "confirmed", "search_business", "next_result", "analyse",
                  "connect_business", "check_latest_connection", "check_business_email",
                  "feature", "book_demo", "check_user",
-                 "social_connect", "check_social_connection"]:
+                 "social_connect", "check_social_connection",
+                 "search_by_url"]:
         graph.add_edge(node, END)
     return graph.compile()
 
