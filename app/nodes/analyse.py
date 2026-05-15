@@ -14,6 +14,15 @@ def handle_analyse(user_id: str, session: dict) -> str:
         return "Please confirm if the shown business is yours. 😊" if en else \
                "Pehle business confirm karein. 😊"
 
+
+    # Fetch full details with reviews using place_id
+    place_id = place.get("id", "") or place.get("name", "")
+    if place_id:
+        from app.services.google_places import get_place_details
+        full_place = get_place_details(place_id)
+        if full_place:
+            place = full_place
+            print(f"[Analyse] Full details: {len(place.get(chr(114)+chr(101)+chr(118)+chr(105)+chr(101)+chr(119)+chr(115), []))} reviews")
     analysis = extract_gmb_score(place)
     session["analysis"] = analysis
     save_session(user_id, session)

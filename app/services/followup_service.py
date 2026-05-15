@@ -150,10 +150,16 @@ def _build_message(followup_type: str, session: dict) -> str:
 
 
 def _send_followup(user_id: str, phone: str, followup_type: str):
-    """Actually send the follow-up — checks if still relevant"""
+    """Actually send the follow-up — max 2 total per user"""
     try:
         session = get_session(user_id)
         if not session:
+            return
+
+        # Max 2 follow-ups per user
+        followup_count = session.get("followup_count", 0)
+        if followup_count >= 2:
+            print(f"[Followup] Max 2 reached for {user_id}, stopping")
             return
 
         # Check if follow-up is still relevant
@@ -168,7 +174,6 @@ def _send_followup(user_id: str, phone: str, followup_type: str):
             all_features = ["health_score", "magic_qr", "insights", "website", "review_reply"]
             offered = session.get("features_offered", [])
             if all(f in offered for f in all_features):
-                # All done — send social upsell instead
                 followup_type = "SOCIAL_MEDIA"
 
         elif followup_type == "SOCIAL_MEDIA":
@@ -181,61 +186,57 @@ def _send_followup(user_id: str, phone: str, followup_type: str):
             print(f"[Followup] No message for {followup_type}, skip")
             return
 
+        # Increment count and save
+        session["followup_count"] = followup_count + 1
+        save_session(user_id, session)
+
         save_message(user_id, "assistant", msg)
         send_whatsapp(phone, msg)
-        print(f"[Followup] Sent {followup_type} to {user_id}")
-
-        # Schedule next follow-up if needed
-        session = get_session(user_id)
-        _maybe_schedule_next(user_id, phone, session)
+        print(f"[Followup] Sent {followup_type} to {user_id} (count={followup_count + 1}/2)")
 
     except Exception as e:
         print(f"[Followup] Error: {e}")
         import traceback; traceback.print_exc()
 
 
-def _maybe_schedule_next(user_id: str, phone: str, session: dict):
-    """After a follow-up, decide if another one is needed"""
-    if not session.get("connect_verified"):
-        return  # Already handled by CONNECT_PENDING
-
-    all_features = ["health_score", "magic_qr", "insights", "website", "review_reply"]
-    offered = session.get("features_offered", [])
-    remaining = [f for f in all_features if f not in offered]
-
-    if remaining:
-        # More features to offer — remind in 10 min
-        _schedule_followup(user_id, phone, 600, "FEATURE_PENDING")
-
-
 # ── Public API ────────────────────────────────────────────────────
 
 def on_connect_link_sent(user_id: str, phone: str):
-    """Call when connect link is sent — schedule follow-up in 7 min"""
-    _schedule_followup(user_id, phone, 420, "CONNECT_PENDING")
+    """Call when connect link is sent — follow-up in 10 min"""
+    _schedule_followup(user_id, phone, 600, "CONNECT_PENDING")
 
 
 def on_connected(user_id: str, phone: str):
-    """Call when user connects — cancel connect follow-up, schedule feature follow-up"""
+    """Call when user connects — cancel connect follow-up, first feature follow-up in 1 hour"""
     _cancel_followup(user_id)
-    # Give user 5 min to interact, then remind about features
-    _schedule_followup(user_id, phone, 300, "FEATURE_PENDING")
+    # Reset followup count on new connection
+    from app.services.redis_service import get_session, save_session
+    session = get_session(user_id)
+    if session:
+        session["followup_count"] = 0
+        save_session(user_id, session)
+    _schedule_followup(user_id, phone, 3600, "FEATURE_PENDING")   # 1 hour
 
 
 def on_feature_delivered(user_id: str, phone: str, feature: str):
-    """Call when a feature is delivered — schedule next feature follow-up in 5 min"""
+    """After feature delivery — schedule follow-up only if followups remaining < 2"""
     session = get_session(user_id)
     if not session:
         return
+
+    followup_count = session.get("followup_count", 0)
+    if followup_count >= 2:
+        print(f"[Followup] Max 2 reached for {user_id}, no more")
+        return
+
     all_features = ["health_score", "magic_qr", "insights", "website", "review_reply"]
     offered = session.get("features_offered", [])
     remaining = [f for f in all_features if f not in offered]
 
     if remaining:
-        _schedule_followup(user_id, phone, 300, "FEATURE_PENDING")
+        _schedule_followup(user_id, phone, 600, "FEATURE_PENDING")   # 10 min
     else:
-        # All features done — social media upsell in 10 min
-        _schedule_followup(user_id, phone, 600, "SOCIAL_MEDIA")
+        _schedule_followup(user_id, phone, 3600, "SOCIAL_MEDIA")      # 1 hour
 
 
 def on_user_message(user_id: str):
