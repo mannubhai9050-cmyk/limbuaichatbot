@@ -67,7 +67,7 @@ TEMPLATE_CONTEXTS = {
     "demo_session_confirmation": {
         "type": "demo",
         "interested_reply": "Demo confirm ho gaya! Hamar team aapke scheduled time par aayega. Koi sawal: +91 9289344726",
-        "not_interested_reply": "Koi baat nahi! Reschedule ke liye +91 9289344726 pe call karein.",
+        "not_interested_reply": "Koi baat nahi! Reschedule ke liye +91 +91 9289344726 pe call karein.",
     },
     "copy_of_service_availability_response_new": {
         "type": "service",
@@ -92,7 +92,7 @@ TEMPLATE_CONTEXTS = {
     "call_back": {
         "type": "callback",
         "interested_reply": "Callback registered! Hamar team jald call karega. +91 9289344726",
-        "not_interested_reply": "Theek hai! Zaroorat ho to +91 9289344726 pe call karein.",
+        "not_interested_reply": "Theek hai! Zaroorat ho to +91 +91 9289344726 pe call karein.",
     },
     "callback_later_after_call": {
         "type": "callback",
@@ -281,43 +281,55 @@ def _extract_maps_url(message: str) -> str:
 
 
 def _try_extract_business(message: str, session: dict):
+    """
+    Extract business name + full city/address from one message.
+    City = everything from city keyword onwards (keeps Sector 48, JMD Megapolis etc.)
+    Business = everything before city keyword.
+    """
     if session.get("found_place") or session.get("search_places"):
         return None
+
     msg_lower = message.lower().strip()
-    found_city = None
+
+    # Find earliest city keyword position
+    city_pos = -1
     for city in INDIAN_CITIES:
-        if city in msg_lower:
-            found_city = city.capitalize()
-            break
-    if not found_city:
+        idx = msg_lower.find(city)
+        if idx >= 0 and (city_pos < 0 or idx < city_pos):
+            city_pos = idx
+
+    if city_pos < 0:
         return None
-    business = re.sub(r"(?i)" + found_city, "", message)
-    business = re.sub(
-        r"(?i)(mere|mera|meri|my|ka|ki|ke|business|shop|dhundho|check|batao|find|,|&|hai|ka naam|mein|me|se|ka|ki)",
-        " ", business
-    )
-    business = re.sub(r"\s+", " ", business).strip(" ,.-& ")
-    generic_starts = [
-        "manufacturer", "manufacturers", "supplier", "suppliers", "dealer",
-        "traders", "trader", "shop", "store", "company", "business",
-        "service", "services", "center", "centre", "restaurant", "clinic",
-        "hospital", "hotel", "school", "college", "office", "factory",
-        "i am", "i am on", "i am in", "every kind", "all kind", "all type"
-    ]
+
+    # Business = before city, City = from city onwards (full address)
+    business = message[:city_pos].strip(" ,.-&\n\t")
+    city_full = message[city_pos:].strip()
+    business = re.sub(r"\s+", " ", business).strip()
+
     if len(business) < 3:
         return None
+
+    # Block generic-only business names
+    generic_starts = [
+        "manufacturer", "manufacturers", "supplier", "suppliers", "dealer",
+        "shop", "store", "company", "business", "service", "services",
+        "center", "centre", "restaurant", "clinic", "hospital", "hotel",
+        "school", "college", "office", "factory", "i am", "every kind",
+    ]
     bl = business.lower()
     for g in generic_starts:
-        if bl == g or bl.startswith(g + " ") or bl.startswith(g + "s "):
+        if bl == g or bl.startswith(g + " "):
             return None
-    meaningful_words = [w for w in business.split() if len(w) > 3 and w.lower() not in
-                        {"every", "kind", "type", "bags", "items", "things", "stuff",
-                         "product", "products", "work", "works", "this", "that"}]
+
+    meaningful_words = [w for w in business.split() if len(w) > 2 and w.lower() not in
+                        {"every", "kind", "type", "items", "stuff", "this", "that", "the", "and"}]
     if len(meaningful_words) == 0:
         return None
+
     if business.lower() in [c.lower() for c in INDIAN_CITIES]:
         return None
-    return f"[ACTION:SEARCH_BUSINESS]name={business}|city={found_city}[/ACTION]"
+
+    return "[ACTION:SEARCH_BUSINESS]name=" + business + "|city=" + city_full + "[/ACTION]"
 
 
 def _try_switch_business(msg_lower: str, businesses: list, session: dict, user_id: str) -> str:

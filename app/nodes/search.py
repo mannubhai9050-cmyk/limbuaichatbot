@@ -22,7 +22,16 @@ def handle_search(user_id: str, session: dict, name: str, city: str) -> str:
     if name.lower() in generic:
         return f"Aapke business ka exact naam kya hai? (jaise: Shyamji Traders, ABC Store) 😊" if not en else                f"What is the exact name of your business? (e.g. Shyamji Traders, ABC Store) 😊"
 
+    # Search with full city/address for precise match
+    # e.g. "Doctor Fresh Water Technology Gurgaon Sector 48"
     places = search_places(name, city, page_size=5)
+
+    # Fallback: if no results, try with just first word of city
+    if not places and " " in city:
+        city_short = city.split()[0]
+        places = search_places(name, city_short, page_size=5)
+        print(f"[Search] Fallback search: '{name} {city_short}'")
+
     session["search_places"] = places
     session["result_index"] = 0
     session["business_name"] = name
