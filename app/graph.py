@@ -67,7 +67,7 @@ TEMPLATE_CONTEXTS = {
     "demo_session_confirmation": {
         "type": "demo",
         "interested_reply": "Demo confirm ho gaya! Hamar team aapke scheduled time par aayega. Koi sawal: +91 9289344726",
-        "not_interested_reply": "Koi baat nahi! Reschedule ke liye +91 +91 9289344726 pe call karein.",
+        "not_interested_reply": "Koi baat nahi! Reschedule ke liye +91 9289344726 pe call karein.",
     },
     "copy_of_service_availability_response_new": {
         "type": "service",
@@ -92,7 +92,7 @@ TEMPLATE_CONTEXTS = {
     "call_back": {
         "type": "callback",
         "interested_reply": "Callback registered! Hamar team jald call karega. +91 9289344726",
-        "not_interested_reply": "Theek hai! Zaroorat ho to +91 +91 9289344726 pe call karein.",
+        "not_interested_reply": "Theek hai! Zaroorat ho to +91 9289344726 pe call karein.",
     },
     "callback_later_after_call": {
         "type": "callback",
@@ -469,6 +469,26 @@ def entry_node(state: ChatState) -> ChatState:
     from app.services.followup_service import on_user_message
     on_user_message(user_id)
 
+    # ── PRIORITY: Explicit language switch ────────────────────────
+    LANG_SWITCH = {
+        "english": "en", "in english": "en", "talk in english": "en",
+        "speak english": "en", "english me": "en", "english mein": "en",
+        "reply in english": "en", "english please": "en",
+        "hindi": "hi", "in hindi": "hi", "hindi me baat karo": "hi",
+        "hindi mein": "hi", "hinglish": "hi",
+    }
+    for phrase, switch_lang in LANG_SWITCH.items():
+        if phrase in msg_lower:
+            session["lang"] = switch_lang
+            save_session(user_id, session)
+            if switch_lang == "en":
+                reply = "Sure! I'll speak in English from now on. 😊"
+            else:
+                reply = "Bilkul! Ab Hindi mein baat karta hoon. 😊"
+            state["raw_reply"] = reply
+            state["action"] = "RESPOND"
+            return state
+
     # ── Template button click handling (HIGHEST PRIORITY) ────────
     btn_intent = get_template_button_intent(message)
     if btn_intent:
@@ -707,16 +727,18 @@ def entry_node(state: ChatState) -> ChatState:
             state["action"] = "NEXT_RESULT"
             return state
 
-    # ── 3. Analyse ────────────────────────────────────────────────
+    # ── 3a. Already confirmed + no analysis → ANY affirmative triggers ANALYSE
     if session.get("confirmed") and not session.get("analysis"):
-        if is_yes(message):
+        # User already confirmed — stop asking, just analyse
+        if is_yes(message) or any(w in msg_lower for w in [
+            "analyse", "analysis", "check", "report", "karo", "kar", "batao",
+            "dikhao", "nikalo", "haan", "han", "ok", "sure", "yes", "continue",
+            "next", "aage", "chalte", "kitni baar", "already", "bata diya"
+        ]):
             state["action"] = "ANALYSE"
             return state
-        analyse_words = ["analyse", "analysis", "check", "report", "karein",
-                         "karo", "nikalo", "dikhao", "bata", "batao", "dekho"]
-        if any(w in msg_lower for w in analyse_words):
-            state["action"] = "ANALYSE"
-            return state
+
+    # ── 3. Analyse (handled above in 3a) ─────────────────────────
 
     # ── 4. Connect after analysis ─────────────────────────────────
     if session.get("analysis") and not session.get("connect_link_sent"):
@@ -870,17 +892,14 @@ def node_confirmed(state: ChatState) -> ChatState:
     session = get_session(user_id)
     place = session.get("found_place", {})
     name = place.get("displayName", {}).get("text", "your business")
-    reply = _llm_reply(
-        user_id,
-        f"Business *{name}* confirm ho gaya hai. "
-        "Warmly acknowledge karo. Phir poocho: "
-        "Kya main Google Business Profile analyse karoon? "
-        "Do NOT say business is connected. Do NOT mention any connection status."
-    )
+    lang = session.get("lang", "hi")
+    if lang == "en":
+        reply = "Great! ✅ *" + name + "* confirmed.\n\nShall I analyse your Google Business Profile? 😊"
+    else:
+        reply = "Bahut achha! ✅ *" + name + "* confirm ho gaya.\n\nKya main aapki Google Business Profile analyse karoon? 😊"
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
-
 
 def node_search_business(state: ChatState) -> ChatState:
     user_id = state["user_id"]

@@ -1,5 +1,5 @@
 import httpx
-from app.services.redis_service import save_session, get_session
+from app.services.redis_service import save_session, get_session, get_history
 from app.core.config import LIMBU_CONNECT_URL, LIMBU_API_BASE
 
 
@@ -48,12 +48,13 @@ def handle_connect_link(user_id: str, session: dict) -> str:
             return (
                 f"Please use this link to connect your Google Business Profile:\n\n"
                 f"🔗 {LIMBU_CONNECT_URL}\n\n"
-                f"Open the link and connect your Business.\n"
+                f"Open the link and sign in with your Gmail.\n"
                 f"Or call us: 📞 +91 9289344726"
             )
         return (
-            f"Apna Google Business Profile connect karein:\n\n"
+            f"Is link se connect karein:\n\n"
             f"🔗 {LIMBU_CONNECT_URL}\n\n"
+            f"Link khol kar Gmail se login karein.\n"
             f"Ya call karein: 📞 +91 9289344726"
         )
 
@@ -62,11 +63,13 @@ def handle_connect_link(user_id: str, session: dict) -> str:
         return (
             f"Sure! Use this link to connect your Google Business Profile:\n\n"
             f"🔗 {connect_url}\n\n"
+            f"Open the link and sign in with your Gmail to grant access.\n"
             f"I'll notify you automatically once connected! 😊"
         )
     return (
-        f"Ji zaroor! Apna Google Business Profile connect karein:\n\n"
+        f"Ji zaroor! Is link se apna Google Business Profile connect karein:\n\n"
         f"🔗 {connect_url}\n\n"
+        f"Link khol kar apni Gmail se login karein aur access de dein.\n"
         f"Connect hone ke baad main automatically bataa doongi! 😊"
     )
 
@@ -88,7 +91,7 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
             data = res.json()
     except Exception as e:
         print(f"[Connect] Error: {e}")
-        return "Sorry, kuch Technical problem aa gayi hai. Kripya 📞 +91 9289344726 par call karein."
+        return "Technical problem aayi. Kripya 📞 +91 9289344726 par call karein."
 
     if data.get("status") == "success" or data.get("success"):
         locations = (
@@ -98,6 +101,7 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
         )
         email = data.get("email", "")
         session["connect_verified"] = True
+        session["connect_link_sent"] = True  # Mark as sent too for consistency
         session["connected_email"] = email
         session["connected_businesses"] = locations
         save_session(user_id, session)
@@ -106,7 +110,7 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
         connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
         return (
             f"Abhi connection nahi mila. 🤔\n\n"
-            f"Please neeche diye gaye link par jaake dobara try karein:\n"
+            f"Kripya is link se dobara try karein:\n"
             f"🔗 {connect_url}\n\n"
             f"Gmail se login karke 'Allow' click karein.\n"
             f"Ya call karein: 📞 +91 9289344726"
@@ -114,13 +118,28 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
 
 
 def _build_connected_response(session: dict, locations: list, email: str) -> str:
-    """Build response showing all connected businesses"""
+    """Build response showing all connected businesses, warn if mismatch"""
     if not locations:
         return (
-            f"🎉 *Congratulations!Aapka account successfully connect ho gaya hai.*\n\n"
-            f"Lekin *{email}* se koi GMB profile linked nahi mili.\n\n"
-            f"Ho sakta hai business kisi aur Gmail se registered ho.\n"
-            f"Sahi Gmail se dobara try karein ya call karein: 📞 +91 9289344726"
+            "🎉 *Account connect ho gaya!*\n\n"
+            "Lekin " + email + " se koi GMB profile linked nahi mili.\n\n"
+            "Ho sakta hai business kisi aur Gmail se registered ho.\n"
+            "Sahi Gmail se dobara try karein ya call karein: 📞 +91 9289344726"
+        )
+
+    # Check if confirmed business matches any connected business
+    searched_name = (session.get("found_place", {}).get("displayName", {}).get("text", "") or
+                     session.get("business_name", "")).lower()
+    matched = any(searched_name in (b.get("title","").lower()) or
+                  b.get("title","").lower() in searched_name
+                  for b in locations) if searched_name else True
+
+    # If mismatch, warn user
+    mismatch_warning = ""
+    if searched_name and not matched:
+        mismatch_warning = (
+            "\n⚠️ *Note:* Connected Gmail mein *" + (session.get("business_name","") or "your business") +
+            "* nahi mili. Aap kisi ek connected business select karein ya sahi Gmail se connect karein.\n"
         )
 
     biz_lines = []
@@ -128,19 +147,73 @@ def _build_connected_response(session: dict, locations: list, email: str) -> str
         name = b.get("title") or b.get("name") or "Business"
         address = b.get("address") or ""
         verified = "✅ Verified" if b.get("verified") else "⚠️ Not Verified"
-        line = f"  {i}. *{name}* — {verified}"
+        line = "  " + str(i) + ". *" + name + "* — " + verified
         if address:
-            line += f"\n     📍 {address}"
+            line += "\n     📍 {address}"
         biz_lines.append(line)
 
     return (
-        f"🎉 *Congrats! Apka Account connect ho gaya!*\n\n"
+        "🎉 *Congrats! Account connect ho gaya!*\n\n"
+        "📧 Email: " + email + "\n\n" +
+        mismatch_warning +
+        "*Aapke Connected Businesses:*\n" +
+        chr(10).join(biz_lines) + "\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Kya main aapki *Full Health Report* nikal doon? (FREE hai) 😊"
+    )
+
+
+def handle_check_email(user_id: str, session: dict, email: str) -> str:
+    session["connected_email"] = email
+    save_session(user_id, session)
+    return handle_check_latest_connection(user_id, session)
+
+
+
+def _build_connected_response(session: dict, locations: list, email: str) -> str:
+    """Build response showing all connected businesses, warn if mismatch"""
+    if not locations:
+        return (
+            "🎉 *Account connect ho gaya!*\n\n"
+            "Lekin " + email + " se koi GMB profile linked nahi mili.\n\n"
+            "Ho sakta hai business kisi aur Gmail se registered ho.\n"
+            "Sahi Gmail se dobara try karein ya call karein: 📞 +91 9289344726"
+        )
+
+    # Check if confirmed business matches any connected business
+    searched_name = (session.get("found_place", {}).get("displayName", {}).get("text", "") or
+                     session.get("business_name", "")).lower()
+    matched = any(searched_name in (b.get("title","").lower()) or
+                  b.get("title","").lower() in searched_name
+                  for b in locations) if searched_name else True
+
+    # If mismatch, warn user
+    mismatch_warning = ""
+    if searched_name and not matched:
+        mismatch_warning = (
+            "\n⚠️ *Note:* Connected Gmail mein *" + (session.get("business_name","") or "your business") +
+            "* nahi mili. Aap kisi ek connected business select karein ya sahi Gmail se connect karein.\n"
+        )
+
+    biz_lines = []
+    for i, b in enumerate(locations, 1):
+        name = b.get("title") or b.get("name") or "Business"
+        address = b.get("address") or ""
+        verified = "✅ Verified" if b.get("verified") else "⚠️ Not Verified"
+        line = "  " + str(i) + ". *" + name + "* — " + verified
+        if address:
+            line += "\n     📍 {address}"
+        biz_lines.append(line)
+
+    return (
+        f"🎉 *Badhaai ho! Account connect ho gaya!*\n\n"
         f"📧 Email: {email}\n\n"
         f"*Aapke Connected Businesses:*\n"
         f"{chr(10).join(biz_lines)}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"Kya main aapki *Full Health Report* nikal doon? (FREE hai) 😊"
     )
+
 
 def handle_check_email(user_id: str, session: dict, email: str) -> str:
     session["connected_email"] = email

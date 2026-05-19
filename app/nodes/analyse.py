@@ -15,13 +15,20 @@ def handle_analyse(user_id: str, session: dict) -> str:
                "Pehle business confirm karein. 😊"
 
 
-    # Fetch full details with reviews using place_id
+    # Fetch full details with reviews using place_id for accurate scoring
     place_id = place.get("id", "") or place.get("name", "")
     if place_id:
-        from app.services.google_places import get_place_details
-        full_place = get_place_details(place_id)
-        if full_place:
-            place = full_place
+        try:
+            from app.services.google_places import get_place_details
+            full_place = get_place_details(place_id)
+            if full_place and full_place.get("id"):
+                rev_count = len(full_place.get("reviews", []))
+                print(f"[Analyse] Full details OK: {place_id} reviews={rev_count}")
+                place = full_place
+            else:
+                print(f"[Analyse] Details empty for {place_id}")
+        except Exception as e:
+            print(f"[Analyse] Details error: {e}")
             print(f"[Analyse] Full details: {len(place.get(chr(114)+chr(101)+chr(118)+chr(105)+chr(101)+chr(119)+chr(115), []))} reviews")
     analysis = extract_gmb_score(place)
     session["analysis"] = analysis
