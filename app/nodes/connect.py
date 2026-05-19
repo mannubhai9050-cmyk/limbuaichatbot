@@ -49,28 +49,30 @@ def handle_connect_link(user_id: str, session: dict) -> str:
                 f"Please use this link to connect your Google Business Profile:\n\n"
                 f"🔗 {LIMBU_CONNECT_URL}\n\n"
                 f"Open the link and sign in with your Gmail.\n"
-                f"Or call us: 📞 +91 9289344726"
+                f"Or call us: 📞 9283344726"
             )
         return (
             f"Is link se connect karein:\n\n"
             f"🔗 {LIMBU_CONNECT_URL}\n\n"
             f"Link khol kar Gmail se login karein.\n"
-            f"Ya call karein: 📞 +91 9289344726"
+            f"Ya call karein: 📞 9283344726"
         )
 
-    connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
+        connect_url = LIMBU_CONNECT_URL + "?phone=" + phone
     if en:
         return (
-            f"Sure! Use this link to connect your Google Business Profile:\n\n"
-            f"🔗 {connect_url}\n\n"
-            f"Open the link and sign in with your Gmail to grant access.\n"
-            f"I'll notify you automatically once connected! 😊"
+            "Use this link to connect your Google Business Profile:\n\n"
+            "🔗 " + connect_url + "\n\n"
+            "Open the link and login with Gmail.\n"
+            "I'll notify you automatically once connected! 😊\n"
+            "Need help? Call 📞 +91 9283344726"
         )
     return (
-        f"Ji zaroor! Is link se apna Google Business Profile connect karein:\n\n"
-        f"🔗 {connect_url}\n\n"
-        f"Link khol kar apni Gmail se login karein aur access de dein.\n"
-        f"Connect hone ke baad main automatically bataa doongi! 😊"
+        "Is link se connect karein:\n\n"
+        "🔗 " + connect_url + "\n\n"
+        "Link khol kar Gmail se login karein.\n"
+        "Connect hone ke baad main automatically bataa doongi! 😊\n"
+        "Ya call karein: 📞 +91 9283344726"
     )
 
 
@@ -91,7 +93,7 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
             data = res.json()
     except Exception as e:
         print(f"[Connect] Error: {e}")
-        return "Technical problem aayi. Kripya 📞 +91 9289344726 par call karein."
+        return "Technical problem aayi. Kripya 📞 9283344726 par call karein."
 
     if data.get("status") == "success" or data.get("success"):
         locations = (
@@ -107,15 +109,23 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
         save_session(user_id, session)
         return _build_connected_response(session, locations, email)
     else:
-        connect_url = f"{LIMBU_CONNECT_URL}?phone={phone}"
+        connect_url = LIMBU_CONNECT_URL + "?phone=" + phone
+        lang = session.get("lang", "hi")
+        if lang == "en":
+            return (
+                "Connection not found yet. 🤔\n\n"
+                "Use this link to connect:\n"
+                "🔗 " + connect_url + "\n\n"
+                "Open the link and login with Gmail.\n"
+                "Need help? Call 📞 +91 9283344726"
+            )
         return (
-            f"Abhi connection nahi mila. 🤔\n\n"
-            f"Kripya is link se dobara try karein:\n"
-            f"🔗 {connect_url}\n\n"
-            f"Gmail se login karke 'Allow' click karein.\n"
-            f"Ya call karein: 📞 +91 9289344726"
+            "Abhi connection nahi mila. 🤔\n\n"
+            "Is link se dobara try karein:\n"
+            "🔗 " + connect_url + "\n\n"
+            "Link khol kar Gmail se login karein.\n"
+            "Ya call karein: 📞 +91 9283344726"
         )
-
 
 def _build_connected_response(session: dict, locations: list, email: str) -> str:
     """Build response showing all connected businesses, warn if mismatch"""
@@ -124,11 +134,12 @@ def _build_connected_response(session: dict, locations: list, email: str) -> str
             "🎉 *Account connect ho gaya!*\n\n"
             "Lekin " + email + " se koi GMB profile linked nahi mili.\n\n"
             "Ho sakta hai business kisi aur Gmail se registered ho.\n"
-            "Sahi Gmail se dobara try karein ya call karein: 📞 +91 9289344726"
+            "Sahi Gmail se dobara try karein ya call karein: 📞 9283344726"
         )
 
     # Check if confirmed business matches any connected business
-    searched_name = (session.get("found_place", {}).get("displayName", {}).get("text", "") or
+    found_place = session.get("found_place") or {}
+    searched_name = (found_place.get("displayName", {}).get("text", "") or
                      session.get("business_name", "")).lower()
     matched = any(searched_name in (b.get("title","").lower()) or
                   b.get("title","").lower() in searched_name
@@ -177,11 +188,12 @@ def _build_connected_response(session: dict, locations: list, email: str) -> str
             "🎉 *Account connect ho gaya!*\n\n"
             "Lekin " + email + " se koi GMB profile linked nahi mili.\n\n"
             "Ho sakta hai business kisi aur Gmail se registered ho.\n"
-            "Sahi Gmail se dobara try karein ya call karein: 📞 +91 9289344726"
+            "Sahi Gmail se dobara try karein ya call karein: 📞 9283344726"
         )
 
     # Check if confirmed business matches any connected business
-    searched_name = (session.get("found_place", {}).get("displayName", {}).get("text", "") or
+    found_place = session.get("found_place") or {}
+    searched_name = (found_place.get("displayName", {}).get("text", "") or
                      session.get("business_name", "")).lower()
     matched = any(searched_name in (b.get("title","").lower()) or
                   b.get("title","").lower() in searched_name
