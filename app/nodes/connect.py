@@ -4,30 +4,18 @@ from app.core.config import LIMBU_CONNECT_URL, LIMBU_API_BASE
 
 
 def _get_phone(user_id: str, session: dict = None) -> str:
-    """
-    Extract phone number. Priority:
-    1. session["connect_phone"] — already saved
-    2. user_id starts with wa_ → wa_917740847114
-    3. user_id is pure digits → use directly
-    """
-    # Already saved in session
     if session and session.get("connect_phone"):
         return session["connect_phone"]
-
-    # wa_ prefix format
     if user_id.startswith("wa_"):
         phone = user_id.replace("wa_", "").replace("+", "").replace(" ", "")
         if not phone.startswith("91") and len(phone) == 10:
             phone = "91" + phone
         return phone
-
-    # Pure digits (some WhatsApp providers send raw number as user_id)
     digits = user_id.replace("+", "").replace(" ", "").replace("-", "")
     if digits.isdigit():
         if not digits.startswith("91") and len(digits) == 10:
             digits = "91" + digits
         return digits
-
     return ""
 
 
@@ -46,19 +34,19 @@ def handle_connect_link(user_id: str, session: dict) -> str:
     if not phone:
         if en:
             return (
-                f"Please use this link to connect your Google Business Profile:\n\n"
-                f"🔗 {LIMBU_CONNECT_URL}\n\n"
-                f"Open the link and sign in with your Gmail.\n"
-                f"Or call us: 📞 9283344726"
+                "Please use this link to connect your Google Business Profile:\n\n"
+                "🔗 " + LIMBU_CONNECT_URL + "\n\n"
+                "Open the link and login with Gmail.\n"
+                "Need help? Call 📞 +91 9283344726"
             )
         return (
-            f"Is link se connect karein:\n\n"
-            f"🔗 {LIMBU_CONNECT_URL}\n\n"
-            f"Link khol kar Gmail se login karein.\n"
-            f"Ya call karein: 📞 9283344726"
+            "Is link se connect karein:\n\n"
+            "🔗 " + LIMBU_CONNECT_URL + "\n\n"
+            "Link khol kar Gmail se login karein.\n"
+            "Ya call karein: 📞 +91 9283344726"
         )
 
-        connect_url = LIMBU_CONNECT_URL + "?phone=" + phone
+    connect_url = LIMBU_CONNECT_URL + "?phone=" + phone
     if en:
         return (
             "Use this link to connect your Google Business Profile:\n\n"
@@ -77,9 +65,8 @@ def handle_connect_link(user_id: str, session: dict) -> str:
 
 
 def handle_check_latest_connection(user_id: str, session: dict) -> str:
-    """Check connection status via Limbu API using phone number"""
+    """Check connection status via Limbu API"""
     phone = _get_phone(user_id, session)
-
     if not phone:
         return handle_connect_link(user_id, session)
 
@@ -103,7 +90,7 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
         )
         email = data.get("email", "")
         session["connect_verified"] = True
-        session["connect_link_sent"] = True  # Mark as sent too for consistency
+        session["connect_link_sent"] = True
         session["connected_email"] = email
         session["connected_businesses"] = locations
         save_session(user_id, session)
@@ -127,8 +114,9 @@ def handle_check_latest_connection(user_id: str, session: dict) -> str:
             "Ya call karein: 📞 +91 9283344726"
         )
 
+
 def _build_connected_response(session: dict, locations: list, email: str) -> str:
-    """Build response showing all connected businesses, warn if mismatch"""
+    """Build response showing all connected businesses"""
     if not locations:
         return (
             "🎉 *Account connect ho gaya!*\n\n"
@@ -139,28 +127,36 @@ def _build_connected_response(session: dict, locations: list, email: str) -> str
 
     # Check if confirmed business matches any connected business
     found_place = session.get("found_place") or {}
-    searched_name = (found_place.get("displayName", {}).get("text", "") or
-                     session.get("business_name", "")).lower()
-    matched = any(searched_name in (b.get("title","").lower()) or
-                  b.get("title","").lower() in searched_name
-                  for b in locations) if searched_name else True
+    searched_name = (
+        found_place.get("displayName", {}).get("text", "") or
+        session.get("business_name", "")
+    ).lower()
 
-    # If mismatch, warn user
+    matched = True
+    if searched_name:
+        matched = any(
+            searched_name in b.get("title", "").lower() or
+            b.get("title", "").lower() in searched_name
+            for b in locations
+        )
+
+    # Mismatch warning
     mismatch_warning = ""
     if searched_name and not matched:
+        biz = session.get("business_name", "") or "your business"
         mismatch_warning = (
-            "\n⚠️ *Note:* Connected Gmail mein *" + (session.get("business_name","") or "your business") +
-            "* nahi mili. Aap kisi ek connected business select karein ya sahi Gmail se connect karein.\n"
+            "\n⚠️ *Note:* Connected Gmail mein *" + biz +
+            "* nahi mili. Sahi Gmail se connect karein ya ek business select karein.\n"
         )
 
     biz_lines = []
     for i, b in enumerate(locations, 1):
         name = b.get("title") or b.get("name") or "Business"
-        address = b.get("address") or ""
+        address = b.get("address") or b.get("locality") or ""
         verified = "✅ Verified" if b.get("verified") else "⚠️ Not Verified"
         line = "  " + str(i) + ". *" + name + "* — " + verified
         if address:
-            line += "\n     📍 {address}"
+            line += "\n     📍 " + address
         biz_lines.append(line)
 
     return (
@@ -168,62 +164,9 @@ def _build_connected_response(session: dict, locations: list, email: str) -> str
         "📧 Email: " + email + "\n\n" +
         mismatch_warning +
         "*Aapke Connected Businesses:*\n" +
-        chr(10).join(biz_lines) + "\n\n"
+        "\n".join(biz_lines) + "\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "Kya main aapki *Full Health Report* nikal doon? (FREE hai) 😊"
-    )
-
-
-def handle_check_email(user_id: str, session: dict, email: str) -> str:
-    session["connected_email"] = email
-    save_session(user_id, session)
-    return handle_check_latest_connection(user_id, session)
-
-
-
-def _build_connected_response(session: dict, locations: list, email: str) -> str:
-    """Build response showing all connected businesses, warn if mismatch"""
-    if not locations:
-        return (
-            "🎉 *Account connect ho gaya!*\n\n"
-            "Lekin " + email + " se koi GMB profile linked nahi mili.\n\n"
-            "Ho sakta hai business kisi aur Gmail se registered ho.\n"
-            "Sahi Gmail se dobara try karein ya call karein: 📞 9283344726"
-        )
-
-    # Check if confirmed business matches any connected business
-    found_place = session.get("found_place") or {}
-    searched_name = (found_place.get("displayName", {}).get("text", "") or
-                     session.get("business_name", "")).lower()
-    matched = any(searched_name in (b.get("title","").lower()) or
-                  b.get("title","").lower() in searched_name
-                  for b in locations) if searched_name else True
-
-    # If mismatch, warn user
-    mismatch_warning = ""
-    if searched_name and not matched:
-        mismatch_warning = (
-            "\n⚠️ *Note:* Connected Gmail mein *" + (session.get("business_name","") or "your business") +
-            "* nahi mili. Aap kisi ek connected business select karein ya sahi Gmail se connect karein.\n"
-        )
-
-    biz_lines = []
-    for i, b in enumerate(locations, 1):
-        name = b.get("title") or b.get("name") or "Business"
-        address = b.get("address") or ""
-        verified = "✅ Verified" if b.get("verified") else "⚠️ Not Verified"
-        line = "  " + str(i) + ". *" + name + "* — " + verified
-        if address:
-            line += "\n     📍 {address}"
-        biz_lines.append(line)
-
-    return (
-        f"🎉 *Badhaai ho! Account connect ho gaya!*\n\n"
-        f"📧 Email: {email}\n\n"
-        f"*Aapke Connected Businesses:*\n"
-        f"{chr(10).join(biz_lines)}\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Kya main aapki *Full Health Report* nikal doon? (FREE hai) 😊"
     )
 
 
