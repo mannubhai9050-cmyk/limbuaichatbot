@@ -376,6 +376,18 @@ async def webhook_connected(request: Request):
             reply = handle_check_latest_connection(user_id, session)
 
         save_message(user_id, "assistant", reply)
+
+        # Send WhatsApp message immediately
+        from app.services.whatsapp_service import send_whatsapp
+        send_whatsapp(phone, reply)
+        print(f"[Webhook Connected] Sent reply to {phone}")
+
+        # Cancel follow-up and start feature follow-ups
+        from app.services.followup_service import on_connected
+        session = get_session(user_id)
+        if session.get("connect_verified"):
+            on_connected(user_id, phone)
+
         return {"status": "ok", "user_id": user_id, "phone": phone}
 
     except Exception as e:

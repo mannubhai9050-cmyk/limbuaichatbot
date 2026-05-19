@@ -412,8 +412,7 @@ def start_connection_polling(user_id: str, phone: str):
             try:
                 session = get_session(user_id)
                 if session.get("connect_verified"):
-                    break
-                if session.get("connect_phone") != phone:
+                    print(f"[ConnPoll] Already verified, stopping")
                     break
                 res = httpx.get(
                     f"{LIMBU_API_BASE}/gmb/status",
@@ -742,7 +741,11 @@ def entry_node(state: ChatState) -> ChatState:
 
     # ── 4. Connect after analysis ─────────────────────────────────
     if session.get("analysis") and not session.get("connect_link_sent"):
-        if is_yes(message):
+        connect_words = [
+            "connect", "jodo", "link", "yes", "haan", "han", "ok", "karo",
+            "sure", "bilkul", "chalte", "aage", "next", "haan karo"
+        ]
+        if is_yes(message) or any(w in msg_lower for w in connect_words):
             state["action"] = "CONNECT_BUSINESS"
             return state
 
