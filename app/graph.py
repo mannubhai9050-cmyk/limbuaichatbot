@@ -110,19 +110,16 @@ TEMPLATE_CONTEXTS = {
 # ── Template button → intent mapping ────────────────────────────
 # When user clicks a WhatsApp template button, map to standard intent
 TEMPLATE_BUTTON_INTENTS = {
-    # Chat / engage
+    # Chat / engage — only multi-word phrases to avoid false matches
     "chat now": "CHAT",
-    "chat": "CHAT",
     "start chat": "CHAT",
-    "continue": "CHAT",
-    # Positive / interested
+    # Positive / interested — only unambiguous button texts
     "interested": "INTERESTED",
     "i am intrested": "INTERESTED",
+    "i am interested": "INTERESTED",
     "intrested": "INTERESTED",
     "confirm now": "INTERESTED",
-    "confirm": "INTERESTED",
     "accept": "INTERESTED",
-    "yes": "INTERESTED",
     # Callback
     "call me back": "CALLBACK",
     "request call back": "CALLBACK",
@@ -130,22 +127,34 @@ TEMPLATE_BUTTON_INTENTS = {
     # Support
     "need support": "SUPPORT",
     "contact support": "SUPPORT",
-    "support": "SUPPORT",
-    "help": "SUPPORT",
-    # Negative
+    # Negative — only clear template button texts
     "not interested": "NOT_INTERESTED",
     "not intrested": "NOT_INTERESTED",
     "connect later": "NOT_INTERESTED",
     "call later": "NOT_INTERESTED",
     "remind me later": "NOT_INTERESTED",
     "reject": "NOT_INTERESTED",
-    "no": "NOT_INTERESTED",
 }
+# NOTE: "yes", "no", "confirm", "chat", "support", "help" are NOT in this dict
+# because they are common conversation words and would cause false matches
 
 
 def get_template_button_intent(btn_text: str) -> str:
-    """Returns intent for template button click, or empty string if not a button"""
-    return TEMPLATE_BUTTON_INTENTS.get(btn_text.lower().strip(), "")
+    """
+    Returns intent ONLY for known template button texts.
+    Strict matching — must be an exact known button phrase.
+    Common words like yes/no/ok are excluded to prevent false matches.
+    """
+    t = btn_text.lower().strip()
+    # Must be at least 2 words OR an exact known phrase
+    # Single common words are NEVER template buttons
+    single_word_blocklist = {
+        "yes", "no", "ok", "okay", "hi", "hello", "haan", "han",
+        "confirm", "chat", "help", "support", "done", "sure"
+    }
+    if t in single_word_blocklist:
+        return ""
+    return TEMPLATE_BUTTON_INTENTS.get(t, "")
 
 
 # ── Keywords ──────────────────────────────────────────────────────
