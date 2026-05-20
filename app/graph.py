@@ -752,6 +752,30 @@ def entry_node(state: ChatState) -> ChatState:
     # ── 5. Features after connected ───────────────────────────────
     if session.get("connect_verified"):
         businesses = session.get("connected_businesses", [])
+
+        # Direct address-based location switch — use connected list, no Google search
+        if businesses and len(businesses) > 1:
+            for b in businesses:
+                addr = (b.get("address", "") or b.get("locality", "")).lower()
+                addr_words = [w for w in addr.replace(",","").split() if len(w) > 3]
+                if addr_words and any(w in msg_lower for w in addr_words):
+                    biz_title = b.get("title", "")
+                    loc_id = b.get("locationResourceName") or b.get("locationId") or ""
+                    if session.get("active_location_id") != loc_id:
+                        session["active_business_name"] = biz_title
+                        session["active_location_id"] = loc_id
+                        session["features_offered"] = []
+                        save_session(user_id, session)
+                        addr_short = (b.get("locality") or b.get("address",""))[:40]
+                        lang = session.get("lang", "hi")
+                        lang = session.get("lang", "hi")
+                        en_r = "Switched to *" + biz_title + "* (" + addr_short + ").\nWhich feature do you need?"
+                        hi_r = "*" + biz_title + "* (" + addr_short + ") select kar liya.\nKaunsa feature chahiye?"
+                        reply = en_r if lang == "en" else hi_r
+                        state["raw_reply"] = reply
+                        state["action"] = "RESPOND"
+                        return state
+
         switch_result = _try_switch_business(msg_lower, businesses, session, user_id)
 
         if switch_result == "needs_city_confirm":

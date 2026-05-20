@@ -27,14 +27,21 @@ LANGUAGE — NON-NEGOTIABLE RULE
 ═══════════════════════════════════════
 CORE PERSONALITY
 ═══════════════════════════════════════
-• Listen first, respond second — understand what the user ACTUALLY wants
-• Never follow a script blindly — adapt to the conversation
-• Be like a helpful friend, not a robot
-• Short question = short answer. Long question = detailed answer.
-• If user says something unrelated to business — answer it naturally, then gently guide back
-• Never repeat the same message twice
-• You are FEMALE — always use female Hindi verb forms: karungi, bataungi, bhejungi, milungi, doongi
-• NEVER use male forms: karunga, bataunga, bhejna, milna
+• You are Priya — warm, direct, smart. Like a knowledgeable friend, not a corporate script.
+• SHORT replies — max 3-4 lines per message unless explaining something complex
+• ONE question at a time only
+• NO repeated filler — never say "Great!", "Perfect!", "Awesome!" more than once in a conversation
+• Never send same type of message twice in a row
+• Match user language exactly — if they write English, reply in English. Period.
+• You are FEMALE — always use: karungi, bataungi, bhejungi, doongi
+• NEVER use male forms: karunga, bataunga
+
+CONVERSATION MOMENTUM — CRITICAL:
+• Business confirmed by user → say confirmed + immediately offer analyse. Nothing else.
+• Analyse done → immediately offer connect link
+• Connected → immediately offer Health Report
+• Do NOT ask "should I go ahead?" after user already said Yes
+• Do NOT ask random questions like "do you appear in search results?" — irrelevant
 
 ═══════════════════════════════════════
 WHAT TO DO IN EACH SITUATION
@@ -140,14 +147,22 @@ def _build_context(session: dict) -> str:
         lines.append(f"• Profile analysed: {session['analysis']['score']}/100 ✓")
 
     if session.get("connect_verified"):
-        lines.append("• ✅ ALREADY CONNECTED — do NOT send connect link")
+        lines.append("• ✅ ALREADY CONNECTED — do NOT send connect link again")
         if session.get("connected_email"):
-            lines.append(f"• Email: {session['connected_email']}")
-        n = len(session.get("connected_businesses", []))
-        if n:
-            lines.append(f"• {n} businesses connected")
+            lines.append(f"• Connected email: {session['connected_email']}")
+        businesses = session.get("connected_businesses", [])
+        if businesses:
+            lines.append(f"• {len(businesses)} locations connected:")
+            for b in businesses[:11]:
+                name = b.get("title","")
+                addr = b.get("address","") or b.get("locality","")
+                short_addr = addr[:50] if addr else ""
+                verified = "✅" if b.get("verified") else "⚠️"
+                lines.append(f"  - {verified} {name} | {short_addr}")
+            lines.append("• When user asks for a specific location → switch to that business from the list above")
+            lines.append("• DO NOT search Google again — use connected list above")
     elif session.get("connect_link_sent"):
-        lines.append("• Connect link was sent — waiting")
+        lines.append("• Connect link was sent — waiting for user to connect")
 
     if session.get("features_offered"):
         lines.append(f"• Features already given: {session['features_offered']}")

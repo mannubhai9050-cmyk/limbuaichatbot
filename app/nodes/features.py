@@ -83,20 +83,13 @@ def handle_feature(user_id: str, session: dict, feature_type: str) -> str:
             return f"✅ *{label}* is being processed... I'll send the result shortly! 😊"
         return f"✅ *{label}* process ho rahi hai... thodi der mein result aayega! 😊"
     else:
-        error_msg = result.get("message", "")
         if en:
-            return (
-                f"*{label}* ran into a small issue. 😕\n"
-                f"{f'({error_msg})' if error_msg else ''}\n\n"
-                f"Please call: 📞 +91 9289344726\n\n"
-                f"{next_offer}"
-            )
-        return (
-            f"*{label}* mein thodi problem aayi. 😕\n"
-            f"{f'({error_msg})' if error_msg else ''}\n\n"
-            f"Kripya call karein: 📞 +91 9289344726\n\n"
-            f"{next_offer}"
-        )
+            msg = f"Something went wrong with *{label}*. Let me try again in a moment.\n\nNeed help? 📞 +91 9289344726"
+        else:
+            msg = f"*{label}* mein kuch technical issue aa gaya. Main dobara try karti hoon.\n\nHelp ke liye: 📞 +91 9289344726"
+        if next_offer:
+            msg += "\n\n" + next_offer
+        return msg
 
 
 # City aliases — handle different spellings
