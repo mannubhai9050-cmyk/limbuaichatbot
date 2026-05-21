@@ -10,6 +10,7 @@ from app.nodes.analyse import handle_analyse
 from app.nodes.booking import handle_booking
 from app.nodes.connect import handle_connect_link, handle_check_latest_connection, handle_check_email
 from app.nodes.social_connect import handle_social_connect_link, handle_check_social_connection
+from app.nodes.franchise import handle_franchise_register
 from app.nodes.features import handle_feature, FEATURE_SEQUENCE
 from app.services.limbu_api import check_user_by_phone
 from app.services.redis_service import save_message, get_session, save_session, get_history
@@ -159,10 +160,9 @@ def get_template_button_intent(btn_text: str) -> str:
 
 # ── Keywords ──────────────────────────────────────────────────────
 YES_WORDS = {
-    "yes", "haan", "han", "ha", "haa", "confirmed", "confirm",
-    "bilkul", "theek", "correct", "right", "sahi", "ji haan",
-    "ji ha", "ji", "ok", "okay", "hnji", "sure", "yep", "yup",
-    "kar do", "kardo", "bhejo", "de do", "zaroor", "please"
+    "हाँ", "हां", "हा", "हाँ जी", "हां जी", "जी", "जी हाँ", "जी हां", "ठीक", "ठीक है", "सही", "बिलकुल", "ज़रूर", "कर दो", "करदो", "भेजो", "दे दो", "चालू करो", "शुरू करो", "हो गया", "होगया", "पक्का", "चलो", "हाँ कर दो", "हाँ भेजो",
+    "yes", "y", "yeah", "yup", "yep", "ok", "okk", "okay", "done", "confirm", "confirmed", "sure", "proceed", "go ahead", "continue", "accepted", "approve", "approved", "fine", "alright", "perfect", "ready", "lets go", "let's go", "do it", "go for it",
+    "haan", "haa", "ha", "han", "hann", "haan ji", "haanji", "hn", "hnn", "hnji", "hmm", "hmmm", "hm", "bilkul", "theek", "theek hai", "thik hai", "sahi", "sahi hai", "pakka", "zaroor", "please", "kar do", "kr do", "kardo", "krdo", "bhejo", "de do"
 }
 NO_WORDS = {
     "no", "nahi", "nhi", "nahin", "nope", "not", "galat",
@@ -576,7 +576,7 @@ def entry_node(state: ChatState) -> ChatState:
             reply = _llm_reply(
                 user_id,
                 "User ne callback request kiya hai. "
-                "Confirm karo ki hamar team jald call karega. "
+                "Confirm karo ki hamari team jald call karegi. "
                 "Contact: +91 9289344726"
             )
             state["raw_reply"] = reply
@@ -884,6 +884,18 @@ def entry_node(state: ChatState) -> ChatState:
         state["action"] = "SEARCH_BUSINESS"
         return state
 
+    # ── 7c. Franchise keywords ────────────────────────────────────
+    FRANCHISE_WORDS = [
+        "franchise", "franchisee", "franshise", "franshize",
+        "partner", "partnership", "business opportunity",
+        "join limbu", "distributor", "reseller", "agency",
+        "invest", "investment", "5 lakh", "5lakh", "earning",
+        "income opportunity", "monthly income", "passive income",
+    ]
+    if any(w in msg_lower for w in FRANCHISE_WORDS):
+        # Let Claude handle with full franchise context
+        pass  # Falls through to LLM below
+
     # ── 8. Claude LLM ─────────────────────────────────────────────
     reply = detect_and_respond(user_id, message)
     detected = _detect_action(reply)
@@ -908,7 +920,7 @@ def _detect_action(text: str) -> str:
     actions = [
         "SEARCH_BUSINESS", "NEXT_RESULT", "ANALYSE", "CONNECT_BUSINESS",
         "CHECK_LATEST_CONNECTION", "CHECK_BUSINESS_EMAIL", "FEATURE",
-        "BOOK_DEMO", "CHECK_USER"
+        "BOOK_DEMO", "CHECK_USER", "REGISTER_FRANCHISE"
     ]
     for action in actions:
         if f"[ACTION:{action}]" in text:
@@ -1168,6 +1180,37 @@ def node_search_by_url(state: ChatState) -> ChatState:
     return state
 
 
+def node_franchise_register(state: ChatState) -> ChatState:
+    user_id = state["user_id"]
+    session = get_session(user_id)
+    raw = state.get("raw_reply", "")
+
+    import re as _re
+    match = _re.search(r'\[ACTION:REGISTER_FRANCHISE\](.*?)\[/ACTION\]', raw, _re.DOTALL)
+    if match:
+        from app.extractors.entity_extractor import extract_action_params
+        params = extract_action_params(match.group(1))
+        name = params.get("name", "")
+        phone = params.get("phone", "")
+        city = params.get("city", "")
+        email = params.get("email", "")
+        # Fallback: try session phone
+        if not phone:
+            phone = session.get("connect_phone", "")
+        reply = handle_franchise_register(user_id, session, name, phone, city, email)
+    else:
+        lang = session.get("lang", "hi")
+        if lang == "en":
+            reply = "Please share your name, phone number, and city to register for the franchise."
+        else:
+            reply = "Franchise ke liye apna naam, phone number, aur city batayein."
+
+    from app.services.redis_service import save_message
+    save_message(user_id, "assistant", reply)
+    state["response"] = reply
+    return state
+
+
 def node_social_connect(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
@@ -1207,6 +1250,7 @@ def build_graph():
     graph.add_node("book_demo", node_book_demo)
     graph.add_node("check_user", node_check_user)
     graph.add_node("search_by_url", node_search_by_url)
+    graph.add_node("franchise_register", node_franchise_register)
     graph.add_node("social_connect", node_social_connect)
     graph.add_node("check_social_connection", node_check_social_connection)
     graph.set_entry_point("entry")
@@ -1223,6 +1267,7 @@ def build_graph():
         "BOOK_DEMO": "book_demo",
         "CHECK_USER": "check_user",
         "SEARCH_BY_URL": "search_by_url",
+        "REGISTER_FRANCHISE": "franchise_register",
         "SOCIAL_CONNECT": "social_connect",
         "CHECK_SOCIAL_CONNECTION": "check_social_connection",
     })
@@ -1230,7 +1275,7 @@ def build_graph():
                  "connect_business", "check_latest_connection", "check_business_email",
                  "feature", "book_demo", "check_user",
                  "social_connect", "check_social_connection",
-                 "search_by_url"]:
+                 "search_by_url", "franchise_register"]:
         graph.add_edge(node, END)
     return graph.compile()
 
