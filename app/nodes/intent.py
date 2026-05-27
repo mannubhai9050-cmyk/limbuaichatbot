@@ -49,4 +49,6 @@ def detect_and_respond(user_id: str, message: str) -> str:
     messages.append(HumanMessage(content=message))
 
     response = llm.invoke(messages)
-    return response.content.strip()
+    reply = response.content.strip()
+    # Return as-is — graph.py handles action tag detection and cleaning
+    return reply

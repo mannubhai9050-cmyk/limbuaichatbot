@@ -89,12 +89,21 @@ def search_knowledge(query: str, top_k: int = 3) -> list:
             return []
 
         query_vector = encoder.encode(query).tolist()
-        results = client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vector,
-            limit=top_k,
-            score_threshold=0.35,
-        )
+        try:
+            results = client.query_points(
+                collection_name=COLLECTION_NAME,
+                query=query_vector,
+                limit=top_k,
+                score_threshold=0.35,
+            ).points
+        except Exception:
+            results = client.search(
+                collection_name=COLLECTION_NAME,
+                query_vector=query_vector,
+                limit=top_k,
+                score_threshold=0.35,
+            )
+
         return [
             {"text": r.payload.get("text", ""), "category": r.payload.get("category", ""), "score": r.score}
             for r in results

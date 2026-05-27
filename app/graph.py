@@ -1107,8 +1107,12 @@ def node_respond(state: ChatState) -> ChatState:
     raw = state.get("raw_reply", "")
     if not raw:
         raw = _fallback(state["user_id"])
-    save_message(state["user_id"], "assistant", raw)
-    state["response"] = raw
+    # Always clean action tags before showing to user
+    clean = re.sub(r"\[ACTION:[A-Z_]+\].*?\[/ACTION\]", "", raw, flags=re.DOTALL).strip()
+    if not clean:
+        clean = _fallback(state["user_id"])
+    save_message(state["user_id"], "assistant", clean)
+    state["response"] = clean
     return state
 
 
