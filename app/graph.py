@@ -1015,10 +1015,16 @@ def entry_node(state: ChatState) -> ChatState:
     reply = detect_and_respond(user_id, message)
     detected = _detect_action(reply)
     if detected != "RESPOND":
-        # Validate before executing
         session = get_session(user_id)
         if not _validate_action(detected, state, session):
-            detected = "RESPOND"
+            # Validation failed — ask LLM for natural response
+            if not state.get("raw_reply"):
+                fallback_reply = _llm_reply(
+                    user_id,
+                    "User ne kuch kaha hai. Naturally respond karo aur poocho kya chahiye."
+                )
+                state["raw_reply"] = fallback_reply or _fallback(user_id)
+            state["action"] = "RESPOND"
         else:
             state["action"] = detected
         if detected == "FEATURE":
@@ -1031,7 +1037,8 @@ def entry_node(state: ChatState) -> ChatState:
 
     # Clean accidental action tags from plain text
     clean_reply = re.sub(r'\[ACTION:[A-Z_]+\].*?\[/ACTION\]', '', reply, flags=re.DOTALL).strip()
-    state["raw_reply"] = clean_reply
+    # Ensure raw_reply is always set
+    state["raw_reply"] = clean_reply or _fallback(user_id)
     state["action"] = "RESPOND"
     return state
 
@@ -1048,11 +1055,11 @@ def _validate_action(action: str, state: dict, session: dict) -> bool:
     Validate that detected action makes sense in current context.
     Prevents hallucinated actions from executing.
     """
-    # SEARCH_BUSINESS needs name in raw_reply
+    # SEARCH_BUSINESS — basic check only
     if action == "SEARCH_BUSINESS":
         raw = state.get("raw_reply", "")
-        if "name=" not in raw or len(raw) < 20:
-            print(f"[Validation] SEARCH_BUSINESS rejected — no name param")
+        if not raw:
+            print(f"[Validation] SEARCH_BUSINESS rejected — empty raw_reply")
             return False
 
     # FEATURE needs connect_verified
@@ -1097,8 +1104,11 @@ def _detect_action(text: str) -> str:
 
 # ── Nodes ─────────────────────────────────────────────────────────
 def node_respond(state: ChatState) -> ChatState:
-    save_message(state["user_id"], "assistant", state["raw_reply"])
-    state["response"] = state["raw_reply"]
+    raw = state.get("raw_reply", "")
+    if not raw:
+        raw = _fallback(state["user_id"])
+    save_message(state["user_id"], "assistant", raw)
+    state["response"] = raw
     return state
 
 

@@ -8,8 +8,8 @@ import re
 from typing import Optional
 
 # ── Config ─────────────────────────────────────────────────────────
-QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")   
+QDRANT_URL = os.getenv("QDRANT_URL", "")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 COLLECTION_NAME = "limbu_knowledge"
 EMBED_MODEL = "all-MiniLM-L6-v2"
 
@@ -61,6 +61,7 @@ def get_client():
             url=QDRANT_URL,
             api_key=QDRANT_API_KEY,
             timeout=10,
+            check_compatibility=False,
         )
         print(f"[KB] Qdrant Cloud connected")
     return _client
@@ -88,20 +89,14 @@ def search_knowledge(query: str, top_k: int = 3) -> list:
             return []
 
         query_vector = encoder.encode(query).tolist()
-
-        results = client.query_points(
+        results = client.search(
             collection_name=COLLECTION_NAME,
-            query=query_vector,
+            query_vector=query_vector,
             limit=top_k,
             score_threshold=0.35,
-        ).points
-
+        )
         return [
-            {
-                "text": r.payload.get("text", ""),
-                "category": r.payload.get("category", ""),
-                "score": r.score,
-            }
+            {"text": r.payload.get("text", ""), "category": r.payload.get("category", ""), "score": r.score}
             for r in results
         ]
     except Exception as e:
@@ -112,21 +107,24 @@ def search_knowledge(query: str, top_k: int = 3) -> list:
 def get_rag_context(query: str, top_k: int = 3) -> str:
     """
     Get RAG context ONLY if query is about KB topics.
-    Returns empty string for normal conversation.
+    Returns empty string for normal conversation OR if Qdrant unavailable.
     """
+    if not QDRANT_URL or not QDRANT_API_KEY:
+        return ""
     if not _needs_rag(query):
         return ""
-
-    results = search_knowledge(query, top_k=top_k)
-    if not results:
+    try:
+        results = search_knowledge(query, top_k=top_k)
+        if not results:
+            return ""
+        parts = [r["text"] for r in results if r["score"] > 0.35]
+        if not parts:
+            return ""
+        print(f"[KB] RAG: {query[:40]!r} → {len(parts)} chunks")
+        return "\n\n".join(parts)
+    except Exception as e:
+        print(f"[KB] RAG skipped: {e}")
         return ""
-
-    parts = [r["text"] for r in results if r["score"] > 0.35]
-    if not parts:
-        return ""
-
-    print(f"[KB] RAG context fetched for: {query[:50]!r} ({len(parts)} chunks)")
-    return "\n\n".join(parts)
 
 
 # ── Knowledge Base Data ────────────────────────────────────────────
@@ -430,7 +428,7 @@ def setup_knowledge_base() -> bool:
         from qdrant_client.models import Distance, VectorParams, PointStruct
         from sentence_transformers import SentenceTransformer
 
-        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=30)
+        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=30, check_compatibility=False)
         encoder = SentenceTransformer(EMBED_MODEL)
 
         # Check if collection exists
@@ -470,7 +468,7 @@ def rebuild_knowledge_base() -> bool:
     """Force rebuild — delete and recreate."""
     try:
         from qdrant_client import QdrantClient
-        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=30)
+        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=30, check_compatibility=False)
         existing = [c.name for c in client.get_collections().collections]
         if COLLECTION_NAME in existing:
             client.delete_collection(COLLECTION_NAME)
