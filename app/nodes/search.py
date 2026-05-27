@@ -90,7 +90,7 @@ def _format_result(places: list, index: int, name: str, city: str, user_id, sess
 
     return (
         f"{prefix}\n\n"
-        f"🏪 *{place.get('displayName', {}).get('text', name)}*\n"
+        f"🏪 {place.get('displayName', {}).get('text', name)}\n"
         f"📍 {place.get('formattedAddress', '')}\n"
         f"⭐ {place.get('rating', 'N/A')}/5 ({place.get('userRatingCount', 0)} reviews)\n"
         f"🔗 {place.get('googleMapsUri', '')}\n\n"

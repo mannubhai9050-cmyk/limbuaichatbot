@@ -32,6 +32,14 @@ class ChatRequest(BaseModel):
 @app.on_event("startup")
 def startup():
     print("🚀 Limbu.ai Chatbot v5 starting...")
+
+# Initialize knowledge base on startup
+try:
+    from app.services.knowledge_base import setup_knowledge_base
+    kb_ok = setup_knowledge_base()
+    print(f"[KB] Knowledge base: {'✅ Ready' if kb_ok else '⚠️ Unavailable (Qdrant not connected)'}")
+except Exception as e:
+    print(f"[KB] Knowledge base skipped: {e}")
     print("✅ Ready!")
 
 
@@ -396,6 +404,17 @@ async def webhook_connected(request: Request):
 
 
 # ── Admin APIs ────────────────────────────────────────────────────
+@app.post("/api/admin/rebuild-kb")
+async def admin_rebuild_kb():
+    """Rebuild Qdrant knowledge base — call when data changes"""
+    try:
+        from app.services.knowledge_base import rebuild_knowledge_base
+        ok = rebuild_knowledge_base()
+        return {"status": "ok" if ok else "error", "message": "KB rebuilt" if ok else "Rebuild failed"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 @app.get("/api/admin/users")
 def admin_users():
     users = get_all_users()

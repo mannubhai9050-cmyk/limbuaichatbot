@@ -9,10 +9,10 @@ def handle_analyse(user_id: str, session: dict) -> str:
 
     if not place:
         return "Please confirm your business first. 😊" if en else \
-               "Pehle business confirm karna hoga. 😊"
+               "Please Pehle business confirm karna kariye. 😊"
     if not session.get("confirmed"):
         return "Please confirm if the shown business is yours. 😊" if en else \
-               "Pehle business confirm karein. 😊"
+               "Please Pehle business confirm karna kariye. 😊"
 
 
     # Fetch full details with reviews using place_id for accurate scoring
@@ -141,12 +141,17 @@ def handle_analyse(user_id: str, session: dict) -> str:
     # Review Reply Score
     reply_pct = data.get("reply_rate")
     if reply_pct is not None:
-        rr_icon = "✅" if float(reply_pct) >= 80 else ("🟡" if float(reply_pct) >= 50 else "🔴")
-        rr_label = "Good" if float(reply_pct) >= 80 else ("Average" if float(reply_pct) >= 50 else "Poor")
+        rr_float = float(reply_pct)
+        rr_icon = "✅" if rr_float >= 80 else ("🟡" if rr_float >= 50 else "🔴")
+        rr_label = "Good" if rr_float >= 80 else ("Average" if rr_float >= 50 else "Improve Karo")
         if en:
             msg += f"{rr_icon} *Review Reply Score: {reply_pct}%* — {rr_label}\n"
-            msg += ("You reply to all your reviews — Google loves this! 🙌\n\n" if float(reply_pct) >= 80 else
-                    "Reply to all reviews to build customer trust.\n\n")
+            if rr_float >= 80:
+                msg += "You reply to all reviews — Google loves this! 🙌\n\n"
+            elif rr_float == 0:
+                msg += "Based on latest visible reviews. Try to reply to all reviews for better ranking.\n\n"
+            else:
+                msg += "Reply to more reviews to build trust and improve ranking.\n\n"
         else:
             msg += f"{rr_icon} *Review Reply Score: {reply_pct}%* — {rr_label}\n"
             msg += ("Aap sabhi reviews ka reply karte ho — Google ko yeh pasand hai! 🙌\n\n" if float(reply_pct) >= 80 else

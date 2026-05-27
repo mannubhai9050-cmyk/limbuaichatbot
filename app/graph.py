@@ -11,6 +11,12 @@ from app.nodes.booking import handle_booking
 from app.nodes.connect import handle_connect_link, handle_check_latest_connection, handle_check_email
 from app.nodes.social_connect import handle_social_connect_link, handle_check_social_connection
 from app.nodes.franchise import handle_franchise_register
+from app.services.user_intelligence import (update_user_intelligence, get_sales_context,
+    detect_hesitation, get_hesitation_response, get_smart_cta,
+    update_buying_intent, get_business_category)
+from app.services.conversation_memory import (get_smart_history, get_objection_response,
+    get_urgency_message, should_offer_discount, get_discount_offer,
+    get_competitor_response, get_abandonment_recovery, is_off_topic)
 from app.nodes.features import handle_feature, FEATURE_SEQUENCE
 from app.services.limbu_api import check_user_by_phone
 from app.services.redis_service import save_message, get_session, save_session, get_history
@@ -31,8 +37,45 @@ def _get_user_lock(user_id: str) -> threading.Lock:
 
 
 # ── LLM helper — language-aware, strips action tags ───────────────
+def _llm_interpret_intent(user_id: str, message: str, context: str = "") -> str:
+    """
+    Fast LLM call to interpret ambiguous user message.
+    Returns: "yes" | "no" | "other"
+    Context: "business_confirm" | "analyse_confirm"
+    """
+    try:
+        session = get_session(user_id)
+        place = session.get("found_place", {}) or {}
+        biz_name = place.get("displayName", {}).get("text", "this business")
+
+        if context == "business_confirm":
+            system = (
+                "You are interpreting if a user is confirming or denying their business. "
+                f"The business shown is: {biz_name}. "
+                "Reply with ONLY one word: 'yes' if they are confirming, 'no' if denying, 'other' if unclear."
+            )
+        else:
+            system = (
+                "Interpret user intent. "
+                "Reply ONLY: 'yes' to proceed, 'no' to decline, 'other' if unclear."
+            )
+
+        response = llm.invoke([
+            SystemMessage(content=system),
+            HumanMessage(content=message)
+        ])
+        result = response.content.strip().lower().split()[0]
+        print(f"[IntentLLM] '{message}' → {result}")
+        if result in ("yes", "no", "other"):
+            return result
+        return "other"
+    except Exception as e:
+        print(f"[IntentLLM] Error: {e}")
+        return "other"
+
+
 def _llm_reply(user_id: str, instruction: str) -> str:
-    """Generate a conversational reply using Claude. Strips any accidental action tags."""
+    """Generate a conversational reply using Claude/OpenAI with RAG context."""
     session = get_session(user_id)
     history = get_history(user_id)
     last_user_msg = ""
@@ -40,8 +83,17 @@ def _llm_reply(user_id: str, instruction: str) -> str:
         if msg.get("role") == "user":
             last_user_msg = msg.get("content", "")
             break
+
+    # RAG: get relevant knowledge base context
+    rag_context = ""
+    try:
+        from app.services.knowledge_base import get_rag_context
+        rag_context = get_rag_context(last_user_msg or instruction, top_k=2)
+    except Exception:
+        pass
+
     messages = [
-        SystemMessage(content=get_main_prompt(session)),
+        SystemMessage(content=get_main_prompt(session, rag_context=rag_context)),
         HumanMessage(content=last_user_msg or "hello"),
         HumanMessage(content=(
             f"[SYSTEM INSTRUCTION: {instruction}. "
@@ -62,28 +114,28 @@ def _llm_reply(user_id: str, instruction: str) -> str:
 TEMPLATE_CONTEXTS = {
     "franchise_msg": {
         "type": "franchise",
-        "interested_reply": "Bahut achha! Limbu.ai franchise mein interested hain aap!\n\nHamare team member aapko jald call karega.\nYa abhi call karein: +91 9289344726",
-        "not_interested_reply": "Koi baat nahi! Agar kabhi consider karna ho to +91 9289344726 pe contact kar sakte hain.",
+        "interested_reply": "Bahut achha! Limbu.ai franchise mein interested hain aap!\n\nHamare team member aapko jald call karega.\nYa abhi call karein: 9289344726",
+        "not_interested_reply": "Koi baat nahi! Agar kabhi consider karna ho to 9289344726 pe contact kar sakte hain.",
     },
     "demo_session_confirmation": {
         "type": "demo",
-        "interested_reply": "Demo confirm ho gaya! Hamar team aapke scheduled time par aayega. Koi sawal: +91 9289344726",
-        "not_interested_reply": "Koi baat nahi! Reschedule ke liye +91 9289344726 pe call karein.",
+        "interested_reply": "Demo confirm ho gaya! Hamar team aapke scheduled time par aayega. Koi sawal: 9289344726",
+        "not_interested_reply": "Koi baat nahi! Reschedule ke liye 9289344726 pe call karein.",
     },
     "copy_of_service_availability_response_new": {
         "type": "service",
-        "interested_reply": "Service confirm ho gayi! Hamar technician jald aayega. Tracking: +91 9289344726",
-        "not_interested_reply": "Theek hai! Baad mein service chahiye to +91 9289344726 pe call karein.",
+        "interested_reply": "Service confirm ho gayi! Hamar technician jald aayega. Tracking: 9289344726",
+        "not_interested_reply": "Theek hai! Baad mein service chahiye to 9289344726 pe call karein.",
     },
     "service_availability_response_new": {
         "type": "service",
-        "interested_reply": "Service confirmed! Our technician will arrive shortly. Contact: +91 9289344726",
-        "not_interested_reply": "No problem! Call us at +91 9289344726 whenever you need service.",
+        "interested_reply": "Service confirmed! Our technician will arrive shortly. Contact: 9289344726",
+        "not_interested_reply": "No problem! Call us at 9289344726 whenever you need service.",
     },
     "vendor_service_availability": {
         "type": "service",
-        "interested_reply": "Service confirmed! Our team will reach you soon. +91 9289344726",
-        "not_interested_reply": "Understood! Contact us at +91 9289344726 whenever needed.",
+        "interested_reply": "Service confirmed! Our team will reach you soon. 9289344726",
+        "not_interested_reply": "Understood! Contact us at 9289344726 whenever needed.",
     },
     "welcome_msg": {
         "type": "welcome",
@@ -92,18 +144,18 @@ TEMPLATE_CONTEXTS = {
     },
     "call_back": {
         "type": "callback",
-        "interested_reply": "Callback registered! Hamar team jald call karega. +91 9289344726",
-        "not_interested_reply": "Theek hai! Zaroorat ho to +91 9289344726 pe call karein.",
+        "interested_reply": "Callback registered! Hamar team jald call karega. 9289344726",
+        "not_interested_reply": "Theek hai! Zaroorat ho to 9289344726 pe call karein.",
     },
     "callback_later_after_call": {
         "type": "callback",
-        "interested_reply": "Callback scheduled! We will call you back shortly. +91 9289344726",
-        "not_interested_reply": "Alright! Feel free to call us at +91 9289344726 anytime.",
+        "interested_reply": "Callback scheduled! We will call you back shortly. 9289344726",
+        "not_interested_reply": "Alright! Feel free to call us at 9289344726 anytime.",
     },
     "call_not_picked_followup": {
         "type": "callback",
-        "interested_reply": "Got it! Our team will call you back soon. +91 9289344726",
-        "not_interested_reply": "No problem! Reach us at +91 9289344726 when convenient.",
+        "interested_reply": "Got it! Our team will call you back soon. 9289344726",
+        "not_interested_reply": "No problem! Reach us at 9289344726 when convenient.",
     },
 }
 
@@ -160,9 +212,15 @@ def get_template_button_intent(btn_text: str) -> str:
 
 # ── Keywords ──────────────────────────────────────────────────────
 YES_WORDS = {
-    "हाँ", "हां", "हा", "हाँ जी", "हां जी", "जी", "जी हाँ", "जी हां", "ठीक", "ठीक है", "सही", "बिलकुल", "ज़रूर", "कर दो", "करदो", "भेजो", "दे दो", "चालू करो", "शुरू करो", "हो गया", "होगया", "पक्का", "चलो", "हाँ कर दो", "हाँ भेजो",
-    "yes", "y", "yeah", "yup", "yep", "ok", "okk", "okay", "done", "confirm", "confirmed", "sure", "proceed", "go ahead", "continue", "accepted", "approve", "approved", "fine", "alright", "perfect", "ready", "lets go", "let's go", "do it", "go for it",
-    "haan", "haa", "ha", "han", "hann", "haan ji", "haanji", "hn", "hnn", "hnji", "hmm", "hmmm", "hm", "bilkul", "theek", "theek hai", "thik hai", "sahi", "sahi hai", "pakka", "zaroor", "please", "kar do", "kr do", "kardo", "krdo", "bhejo", "de do"
+    "yes", "yeah", "yeahh", "yess", "yesss",
+    "haan", "han", "ha", "haa", "hnji", "haan ji",
+    "confirmed", "confirm", "bilkul", "theek", "correct",
+    "right", "sahi", "ji haan", "ji ha", "ji",
+    "ok", "okay", "okk", "okkk", "sure", "yep", "yup",
+    "kar do", "kardo", "bhejo", "de do", "zaroor", "please",
+    "yahi hai", "yahi he", "ye hai", "ye he", "yeh hai",
+    "ha ji", "haan bhai", "haan yaar", "bilkul sahi",
+    "absolutely", "definitely", "of course", "done"
 }
 NO_WORDS = {
     "no", "nahi", "nhi", "nahin", "nope", "not", "galat",
@@ -270,23 +328,21 @@ def _detect_lang(message: str, current_lang: str = "hi") -> str:
 
 
 def _extract_maps_url(message: str) -> str:
-    """
-    Detect Google Maps URLs in message.
-    Handles: maps.app.goo.gl, maps.google.com, google.com/maps
-    Returns the URL if found, empty string otherwise.
-    """
     import re as _re
     patterns = [
         r'https?://maps\.app\.goo\.gl/\S+',
         r'https?://maps\.google\.com/\S+',
         r'https?://www\.google\.com/maps/\S+',
         r'https?://goo\.gl/maps/\S+',
+        r'https?://share\.google/\S+',
+        r'https?://www\.google\.com/search\?\S+',
+        r'https?://g\.co/\S+',
     ]
-    for pattern in patterns:
-        match = _re.search(pattern, message)
-        if match:
-            return match.group(0).rstrip('.,!?)')
-    return ""
+    for p in patterns:
+        m = _re.search(p, message)
+        if m:
+            return m.group(0).rstrip('.,!?)')
+    return ''
 
 
 def _try_extract_business(message: str, session: dict):
@@ -477,6 +533,44 @@ def entry_node(state: ChatState) -> ChatState:
     from app.services.followup_service import on_user_message
     on_user_message(user_id)
 
+    # Update user intelligence — lead score, personality, funnel stage
+    update_user_intelligence(user_id, message)
+    update_buying_intent(user_id, message)
+    session = get_session(user_id)  # Refresh after update
+
+    # ── Hesitation Detection ──────────────────────────────────────
+    if detect_hesitation(message) and session.get("found_place"):
+        reply = get_hesitation_response(session)
+        if reply:
+            # Add urgency if high hesitation
+            if session.get("message_count", 0) > 5:
+                urgency = get_urgency_message(session)
+                reply += "\n\n💡 " + urgency
+            state["raw_reply"] = reply
+            state["action"] = "RESPOND"
+            return state
+
+    # ── Smart Discount Trigger ────────────────────────────────────
+    if should_offer_discount(session) and not session.get("discount_offered"):
+        # Only offer once and when asking about plans
+        if any(w in msg_lower for w in ["plan", "price", "kitna", "mahnga", "expensive"]):
+            session["discount_offered"] = True
+            save_session(user_id, session)
+            discount_msg = get_discount_offer(session)
+            state["raw_reply"] = discount_msg
+            state["action"] = "RESPOND"
+            return state
+
+    # ── Competitor Mention ────────────────────────────────────────
+    for comp in ["dhanda ai", "grexa", "justdial", "sulekha", "indiamart"]:
+        if comp in msg_lower:
+            lang = session.get("lang", "hi")
+            comp_reply = get_competitor_response(comp, lang)
+            if comp_reply:
+                state["raw_reply"] = comp_reply
+                state["action"] = "RESPOND"
+                return state
+
     # ── PRIORITY: Explicit language switch ────────────────────────
     LANG_SWITCH = {
         "english": "en", "in english": "en", "talk in english": "en",
@@ -566,7 +660,7 @@ def entry_node(state: ChatState) -> ChatState:
                     user_id,
                     "User ne 'Not Interested' ya 'Remind Me Later' click kiya. "
                     "Politely acknowledge karo, koi pressure nahi. "
-                    "Batao ki agar kabhi zaroorat ho to wapas aa sakte hain: +91 9289344726"
+                    "Batao ki agar kabhi zaroorat ho to wapas aa sakte hain: 9289344726"
                 )
             state["raw_reply"] = reply
             state["action"] = "RESPOND"
@@ -576,8 +670,8 @@ def entry_node(state: ChatState) -> ChatState:
             reply = _llm_reply(
                 user_id,
                 "User ne callback request kiya hai. "
-                "Confirm karo ki hamari team jald call karegi. "
-                "Contact: +91 9289344726"
+                "Confirm karo ki hamar team jald call karega. "
+                "Contact: 9289344726"
             )
             state["raw_reply"] = reply
             state["action"] = "RESPOND"
@@ -588,7 +682,7 @@ def entry_node(state: ChatState) -> ChatState:
                 user_id,
                 "User ko support chahiye. "
                 "Poocho kya problem hai aur batao: "
-                "📞 +91 9289344726 | info@limbu.ai"
+                "📞 9289344726 | info@limbu.ai"
             )
             state["raw_reply"] = reply
             state["action"] = "RESPOND"
@@ -734,17 +828,38 @@ def entry_node(state: ChatState) -> ChatState:
         elif is_no(message):
             state["action"] = "NEXT_RESULT"
             return state
+        else:
+            # Not a clear yes/no — ask LLM to interpret intent
+            # LLM decides: is user confirming, denying, or asking something else?
+            intent = _llm_interpret_intent(user_id, message, context="business_confirm")
+            if intent == "yes":
+                session["confirmed"] = True
+                save_session(user_id, session)
+                state["action"] = "CONFIRMED"
+                return state
+            elif intent == "no":
+                state["action"] = "NEXT_RESULT"
+                return state
+            # else: user asked something else — fall through to LLM response
 
-    # ── 3a. Already confirmed + no analysis → ANY affirmative triggers ANALYSE
+    # ── 3a. Already confirmed + no analysis → ANALYSE trigger ────
     if session.get("confirmed") and not session.get("analysis"):
-        # User already confirmed — stop asking, just analyse
-        if is_yes(message) or any(w in msg_lower for w in [
+        ANALYSE_WORDS = [
             "analyse", "analysis", "check", "report", "karo", "kar", "batao",
             "dikhao", "nikalo", "haan", "han", "ok", "sure", "yes", "continue",
-            "next", "aage", "chalte", "kitni baar", "already", "bata diya"
-        ]):
+            "next", "aage", "chalte", "kitni baar", "already", "bata diya",
+            "dekho", "nikaal", "shuru"
+        ]
+        if is_yes(message) or any(w in msg_lower for w in ANALYSE_WORDS):
             state["action"] = "ANALYSE"
             return state
+        else:
+            # Unclear — LLM interpret
+            intent = _llm_interpret_intent(user_id, message, context="analyse_confirm")
+            if intent == "yes":
+                state["action"] = "ANALYSE"
+                return state
+            # "no" or "other" — fall through to LLM for natural response
 
     # ── 3. Analyse (handled above in 3a) ─────────────────────────
 
@@ -900,7 +1015,12 @@ def entry_node(state: ChatState) -> ChatState:
     reply = detect_and_respond(user_id, message)
     detected = _detect_action(reply)
     if detected != "RESPOND":
-        state["action"] = detected
+        # Validate before executing
+        session = get_session(user_id)
+        if not _validate_action(detected, state, session):
+            detected = "RESPOND"
+        else:
+            state["action"] = detected
         if detected == "FEATURE":
             m = re.search(r'\[ACTION:FEATURE\]type=(\w+)\[/ACTION\]', reply)
             if m:
@@ -914,6 +1034,53 @@ def entry_node(state: ChatState) -> ChatState:
     state["raw_reply"] = clean_reply
     state["action"] = "RESPOND"
     return state
+
+
+def _safe_action(action: str, state: dict, session: dict) -> str:
+    """Validate action before routing — fallback to RESPOND if invalid."""
+    if _validate_action(action, state, session):
+        return action
+    return "RESPOND"
+
+
+def _validate_action(action: str, state: dict, session: dict) -> bool:
+    """
+    Validate that detected action makes sense in current context.
+    Prevents hallucinated actions from executing.
+    """
+    # SEARCH_BUSINESS needs name in raw_reply
+    if action == "SEARCH_BUSINESS":
+        raw = state.get("raw_reply", "")
+        if "name=" not in raw or len(raw) < 20:
+            print(f"[Validation] SEARCH_BUSINESS rejected — no name param")
+            return False
+
+    # FEATURE needs connect_verified
+    if action == "FEATURE":
+        if not session.get("connect_verified"):
+            print(f"[Validation] FEATURE rejected — not connected")
+            return False
+
+    # ANALYSE needs confirmed
+    if action == "ANALYSE":
+        if not session.get("confirmed") and not session.get("found_place"):
+            print(f"[Validation] ANALYSE rejected — no confirmed business")
+            return False
+
+    # CONNECT_BUSINESS needs found_place or confirmed
+    if action == "CONNECT_BUSINESS":
+        if not session.get("confirmed") and not session.get("analysis"):
+            print(f"[Validation] CONNECT_BUSINESS rejected — not ready")
+            return False
+
+    # REGISTER_FRANCHISE needs name and phone
+    if action == "REGISTER_FRANCHISE":
+        raw = state.get("raw_reply", "")
+        if "name=" not in raw or "phone=" not in raw:
+            print(f"[Validation] REGISTER_FRANCHISE rejected — missing params")
+            return False
+
+    return True
 
 
 def _detect_action(text: str) -> str:
@@ -1100,83 +1267,78 @@ def node_check_user(state: ChatState) -> ChatState:
 
 
 def node_search_by_url(state: ChatState) -> ChatState:
-    """Handle Google Maps URL — fetch place details and show to user"""
-    user_id = state["user_id"]
+    user_id = state['user_id']
     session = get_session(user_id)
-    url = state.get("raw_reply", "")
-    lang = session.get("lang", "hi")
-
+    url = state.get('raw_reply', '')
+    lang = session.get('lang', 'hi')
     try:
         import httpx as _httpx
-        # Resolve short URL if needed
+        import re as _re
+        import urllib.parse as _up
         resolved_url = url
-        if "goo.gl" in url or "maps.app.goo.gl" in url:
+        if any(x in url for x in ['goo.gl', 'share.google', 'g.co']):
             try:
                 with _httpx.Client(timeout=10, follow_redirects=True) as c:
                     r = c.get(url)
                     resolved_url = str(r.url)
-            except Exception:
-                pass
-
-        # Extract CID or place_id from URL
-        import re as _re
-        cid_match = _re.search(r'cid=(\d+)', resolved_url)
-        place_id_match = _re.search(r'place_id=([A-Za-z0-9_-]+)', resolved_url)
-        query_match = _re.search(r'/place/([^/@]+)', resolved_url)
-
+                    print(f'[SearchByURL] Resolved: {resolved_url[:80]}')
+            except Exception as e:
+                print(f'[SearchByURL] Resolve error: {e}')
+        search_query = ''
+        q_match = _re.search(r'[?&]q=([^&]+)', resolved_url)
+        if q_match:
+            search_query = _up.unquote_plus(q_match.group(1))
+            print(f'[SearchByURL] Query: {search_query}')
         from app.services.google_places import search_places
         places = []
-
-        if query_match:
-            query = query_match.group(1).replace('+', ' ').replace('%20', ' ')
-            places = search_places(query, "", page_size=1)
-        elif cid_match:
-            cid = cid_match.group(1)
-            places = search_places(f"cid:{cid}", "", page_size=1)
-
+        if search_query:
+            places = search_places(search_query, '', page_size=1)
+        if not places:
+            cid_m = _re.search(r'cid=(\d+)', resolved_url)
+            if cid_m:
+                places = search_places('cid:' + cid_m.group(1), '', page_size=1)
+        if not places:
+            pm = _re.search(r'/place/([^/@?]+)', resolved_url)
+            if pm:
+                places = search_places(_up.unquote_plus(pm.group(1)), '', page_size=1)
         if places:
             place = places[0]
-            name = place.get("displayName", {}).get("text", "Business")
-            address = place.get("formattedAddress", "")
-            rating = place.get("rating", 0)
-            reviews = place.get("userRatingCount", 0)
-            maps_uri = place.get("googleMapsUri", resolved_url)
-
-            session["found_place"] = place
-            session["search_places"] = places
-            session["result_index"] = 0
-            session["business_name"] = name
+            name = place.get('displayName', {}).get('text', 'Business')
+            address = place.get('formattedAddress', '')
+            rating = place.get('rating', 0)
+            reviews = place.get('userRatingCount', 0)
+            maps_uri = place.get('googleMapsUri', url)
+            session['found_place'] = place
+            session['search_places'] = places
+            session['result_index'] = 0
+            session['business_name'] = name
+            session.pop('confirmed', None)
             save_session(user_id, session)
-
-            if lang == "en":
-                reply = "Found this business from your link:\n\n"
-                reply += "🏪 *" + name + "*\n"
-                reply += "📍 " + address + "\n"
-                reply += "⭐ " + str(rating) + "/5 (" + str(reviews) + " reviews)\n"
-                reply += "🔗 " + maps_uri + "\n\n"
-                reply += "Is this your business?"
+            stars = str(rating) + '/5' if rating else 'N/A'
+            if lang == 'en':
+                reply = 'Found it!\n\n'
+                reply += '\U0001f3ea *' + name + '*\n'
+                reply += '\U0001f4cd ' + address + '\n'
+                reply += '\u2b50 ' + stars + ' (' + str(reviews) + ' reviews)\n'
+                reply += '\U0001f517 ' + maps_uri + '\n\n'
+                reply += 'Is this your business?'
             else:
-                reply = "Aapke link se yeh mila:\n\n"
-                reply += "🏪 *" + name + "*\n"
-                reply += "📍 " + address + "\n"
-                reply += "⭐ " + str(rating) + "/5 (" + str(reviews) + " reviews)\n"
-                reply += "🔗 " + maps_uri + "\n\n"
-                reply += "Kya yeh aapka business hai?"
+                reply = 'Yeh mila!\n\n'
+                reply += '\U0001f3ea *' + name + '*\n'
+                reply += '\U0001f4cd ' + address + '\n'
+                reply += '\u2b50 ' + stars + ' (' + str(reviews) + ' reviews)\n'
+                reply += '\U0001f517 ' + maps_uri + '\n\n'
+                reply += 'Kya yeh aapka business hai?'
         else:
-            if lang == "en":
-                reply = "I couldn't find the business from this link. Please share your business name and city directly."
+            if lang == 'en':
+                reply = 'Business not found from this link. Please share name and city directly.'
             else:
-                reply = "Is link se business nahi mila. Kripya business naam aur city directly batayein."
-
+                reply = 'Is link se business nahi mila. Naam aur city directly batayein.'
     except Exception as e:
-        print(f"[SearchByURL] Error: {e}")
-        if lang == "en":
-            reply = "Couldn't process this link. Please share your business name and city."
-        else:
-            reply = "Link process nahi ho saka. Business naam aur city batayein."
-
-    save_message(user_id, "assistant", reply)
-    state["response"] = reply
+        print(f'[SearchByURL] Error: {e}')
+        reply = 'Link process nahi ho saka. Business naam aur city batayein.' if lang != 'en' else 'Could not process link. Please share business name and city.'
+    save_message(user_id, 'assistant', reply)
+    state['response'] = reply
     return state
 
 
@@ -1184,19 +1346,14 @@ def node_franchise_register(state: ChatState) -> ChatState:
     user_id = state["user_id"]
     session = get_session(user_id)
     raw = state.get("raw_reply", "")
-
     import re as _re
     match = _re.search(r'\[ACTION:REGISTER_FRANCHISE\](.*?)\[/ACTION\]', raw, _re.DOTALL)
     if match:
-        from app.extractors.entity_extractor import extract_action_params
         params = extract_action_params(match.group(1))
         name = params.get("name", "")
-        phone = params.get("phone", "")
+        phone = params.get("phone", "") or session.get("connect_phone", "")
         city = params.get("city", "")
         email = params.get("email", "")
-        # Fallback: try session phone
-        if not phone:
-            phone = session.get("connect_phone", "")
         reply = handle_franchise_register(user_id, session, name, phone, city, email)
     else:
         lang = session.get("lang", "hi")
@@ -1204,8 +1361,6 @@ def node_franchise_register(state: ChatState) -> ChatState:
             reply = "Please share your name, phone number, and city to register for the franchise."
         else:
             reply = "Franchise ke liye apna naam, phone number, aur city batayein."
-
-    from app.services.redis_service import save_message
     save_message(user_id, "assistant", reply)
     state["response"] = reply
     return state
@@ -1283,12 +1438,35 @@ def build_graph():
 app_graph = build_graph()
 
 
+def _fallback(user_id: str) -> str:
+    try:
+        lang = get_session(user_id).get("lang", "hi")
+        if lang == "en":
+            return "Sorry, technical issue. Please try again or call 📞 +91 9289344726."
+        return "Maafi chahti hoon, kuch problem aayi. Dobara try karein ya call karein: 📞 +91 9289344726"
+    except Exception:
+        return "Sorry. Call: +91 9289344726"
+
+
 def chat(user_id: str, message: str) -> str:
+    """Process with per-user lock + fail-safe + hallucination guard."""
     lock = _get_user_lock(user_id)
     with lock:
-        save_message(user_id, "user", message)
-        result = app_graph.invoke({"user_id": user_id, "message": message})
-        return result.get(
-            "response",
-            "Sorry, something went wrong. Please try again or call 📞 +91 9289344726."
-        )
+        try:
+            save_message(user_id, "user", message)
+            result = app_graph.invoke({"user_id": user_id, "message": message})
+            response = result.get("response", "")
+
+            # Fail-safe: empty response
+            if not response or len(response.strip()) < 3:
+                return _fallback(user_id)
+
+            # Hallucination guard: strip leaked action tags
+            response = re.sub(r"\[ACTION:[A-Z_]+\].*?\[/ACTION\]", "", response, flags=re.DOTALL).strip()
+
+            return response or _fallback(user_id)
+
+        except Exception as e:
+            print(f"[Chat] Error {user_id}: {e}")
+            import traceback; traceback.print_exc()
+            return _fallback(user_id)

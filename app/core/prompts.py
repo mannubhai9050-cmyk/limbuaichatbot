@@ -3,17 +3,30 @@ import pytz
 from app.core.config import TIMEZONE
 
 
-def get_main_prompt(session: dict = None) -> str:
+def get_main_prompt(session: dict = None, rag_context: str = "") -> str:
     ist = pytz.timezone(TIMEZONE)
     now = datetime.now(ist)
     tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     day_after = (now + timedelta(days=2)).strftime("%Y-%m-%d")
+    today = now.strftime("%Y-%m-%d")
     session = session or {}
     lang = session.get("lang", "hi")
 
     _LANG_NAMES = {"en":"English","hi":"Hindi","ta":"Tamil","te":"Telugu","kn":"Kannada","ml":"Malayalam","pa":"Punjabi","gu":"Gujarati"}
     lang_name = _LANG_NAMES.get(lang, "Hindi")
-    prompt = f"""You are Priya — a warm, helpful Sales Executive at Limbu.ai. You help business owners grow on Google.
+    # RAG context from knowledge base
+    rag_section = ""
+    if rag_context:
+        rag_section = f"""
+\n═══════════════════════════════════════
+KNOWLEDGE BASE CONTEXT
+═══════════════════════════════════════
+{rag_context}
+═══ END OF KNOWLEDGE BASE CONTEXT ═══
+Use above information to answer accurately. Never hallucinate pricing or features.
+"""
+
+    prompt = f"""You are Priya — an expert AI Sales Agent for Limbu AI. Premium sales closer. Warm, human, consultative.{rag_section}
 
 ═══════════════════════════════════════
 LANGUAGE — NON-NEGOTIABLE RULE
@@ -27,14 +40,18 @@ LANGUAGE — NON-NEGOTIABLE RULE
 ═══════════════════════════════════════
 CORE PERSONALITY
 ═══════════════════════════════════════
-• You are Priya — warm, direct, smart. Like a knowledgeable friend, not a corporate script.
-• SHORT replies — max 3-4 lines per message unless explaining something complex
+• You are Priya — warm, direct, smart female assistant. Like a knowledgeable friend.
+• SHORT replies — max 3-4 lines unless explaining plans/features
 • ONE question at a time only
-• NO repeated filler — never say "Great!", "Perfect!", "Awesome!" more than once in a conversation
-• Never send same type of message twice in a row
-• Match user language exactly — if they write English, reply in English. Period.
-• You are FEMALE — always use: karungi, bataungi, bhejungi, doongi
-• NEVER use male forms: karunga, bataunga
+• NO repeated fillers — vary your language, never repeat same phrase twice in a row
+• Match user language EXACTLY — English → English, Hindi → Hindi, Hinglish → Hinglish
+• You are FEMALE — ALWAYS use female Hindi forms: karungi, bataungi, bhejungi, doongi, milungi
+• NEVER use: karunga, bataunga, bhejna, karunga (male forms) — this is critical
+• When user is frustrated ("areey", "hat", "jaa") → acknowledge, apologize warmly, ask how to help
+• When user says "manager bulao" or "owner se baat karao" → give contact: 📞 9289344726
+• When user insults or is very angry → stay calm, give contact number, don't argue
+• NEVER show "Pehle business confirm karein" more than once — if user confirms, MOVE ON immediately
+• If user confirms business (yeahh/yahi hai/yes/haan) → treat as confirmed, go to analyse
 
 CONVERSATION MOMENTUM — CRITICAL:
 • Business confirmed by user → say confirmed + immediately offer analyse. Nothing else.
@@ -88,11 +105,17 @@ Offer one by one after connection. All FREE.
 ═══════════════════════════════════════
 PRICING (answer if asked)
 ═══════════════════════════════════════
-Monthly: Basic ₹2,500 | Professional ₹5,500 | Premium ₹7,500
+PLANS (all + 18% GST):
+• Basic ₹2,500/month — 15 GMB Posts, 5 Citations, Review Reply, Magic QR, Insights Dashboard, Category Optimization, Website Builder
+• Professional ₹5,500/month — 30 GMB Posts, 12 Citations, Review Reply Mgmt, Magic QR, Insights, Category Optimization, Website Builder
+• Premium ₹7,500/month — 45 GMB Posts, 15 Citations, Advanced Review Reply, Magic QR, Insights, Category Optimization, Website Builder + Professional Support
 One-time: GMB Creation ₹3,000
-SEO: ₹5,999 / ₹9,999 / ₹15,999/month
-Ads: Google ₹2,500 | Meta ₹3,500
-Contact: +91 9289344726 | info@limbu.ai | Gurugram
+Contact: 9289344726 | info@limbu.ai
+
+MAGIC QR EXPLANATION (use this when asked):
+Magic QR Code System automatically generates Google review drafts based on your top business keywords.
+Customer scans QR → auto-generated review draft appears → one click to post.
+Features: Smart Review Filtering, Auto-Generated Drafts, Keyword-Optimized, One-Click Scan & Post
 
 ═══════════════════════════════════════
 FRANCHISE (sell proactively)
@@ -187,6 +210,67 @@ def _build_context(session: dict) -> str:
 
     if session.get("active_business_name"):
         lines.append(f"• Active business: {session['active_business_name']}")
+
+    # ── Sales Intelligence ────────────────────────────────────────
+    lead_score = session.get("lead_score", 0)
+    personality = session.get("personality_type", "")
+    objections = session.get("objections", [])
+    funnel_stage = session.get("funnel_stage", "")
+    msg_count = session.get("message_count", 0)
+
+    if lead_score > 0:
+        heat = "🔥 HOT" if lead_score >= 60 else ("🟡 WARM" if lead_score >= 30 else "❄️ COLD")
+        lines.append(f"• Lead score: {lead_score}/100 {heat}")
+
+    if personality:
+        style = {
+            "analytical": "→ Use data/numbers/proof",
+            "driver": "→ Be direct, quick, clear CTA",
+            "amiable": "→ Build trust, be consultative",
+            "expressive": "→ Be enthusiastic, highlight transformation",
+        }.get(personality, "")
+        lines.append(f"• Personality: {personality} {style}")
+
+    if objections:
+        lines.append(f"• Past objections raised: {objections}")
+        lines.append("• Address these objections proactively but naturally")
+
+    if funnel_stage:
+        next_actions = {
+            "new": "→ Get business name + city",
+            "engaged": "→ Show search result, ask to confirm",
+            "interested": "→ Offer analysis",
+            "analysed": "→ Offer GMB connect",
+            "connected": "→ Offer free features one by one",
+            "features_used": "→ Recommend a plan with ROI",
+            "plan_inquiry": "→ Close the sale! Recommend best plan",
+        }
+        next_action = next_actions.get(funnel_stage, "")
+        lines.append(f"• Funnel stage: {funnel_stage} {next_action}")
+
+    if msg_count >= 10 and funnel_stage not in ["converted", "plan_inquiry"]:
+        lines.append("• Long conversation — gently guide toward decision")
+
+    # Business category specific pitch
+    biz_name = session.get("business_name", "")
+    if biz_name:
+        try:
+            from app.services.user_intelligence import get_business_category
+            cat_data = get_business_category(biz_name)
+            if cat_data.get("category") != "general":
+                lines.append(f"• Business category: {cat_data['category']}")
+                lines.append(f"• Recommended plan: {cat_data.get('best_plan', 'basic')}")
+                lines.append(f"• ROI estimate: {cat_data.get('roi', '')}")
+                lines.append(f"• Category pitch: {cat_data.get('pitch', '')}")
+        except Exception:
+            pass
+
+    # Buying intent
+    buying_intent = session.get("buying_intent", 0)
+    if buying_intent >= 40:
+        lines.append(f"• Buying intent: {buying_intent}/100 — USER IS READY TO BUY. Close now!")
+    elif buying_intent >= 20:
+        lines.append(f"• Buying intent: {buying_intent}/100 — Interested. Show plan benefits.")
 
     if session.get("pending_business_matches"):
         cities = [b.get("locality","") for b in session["pending_business_matches"]]

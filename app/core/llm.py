@@ -1,9 +1,25 @@
-from langchain_anthropic import ChatAnthropic
-from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+"""
+LLM provider — supports both Anthropic Claude and OpenAI GPT.
+Set LLM_PROVIDER=openai in .env to use OpenAI.
+"""
+import os
+from app.core.config import LLM_PROVIDER, ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENAI_MODEL
 
-llm = ChatAnthropic(
-    model=CLAUDE_MODEL,
-    api_key=ANTHROPIC_API_KEY,
-    temperature=0.65,
-    max_tokens=800
-)
+if LLM_PROVIDER == "openai":
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(
+        model=OPENAI_MODEL,
+        api_key=OPENAI_API_KEY,
+        temperature=0.7,
+        max_tokens=1000,
+    )
+    print(f"[LLM] Using OpenAI: {OPENAI_MODEL}")
+else:
+    from langchain_anthropic import ChatAnthropic
+    llm = ChatAnthropic(
+        model="claude-sonnet-4-5",
+        api_key=ANTHROPIC_API_KEY,
+        temperature=0.7,
+        max_tokens=1000,
+    )
+    print(f"[LLM] Using Anthropic: claude-sonnet-4-5")

@@ -1,17 +1,39 @@
+# Core framework
 fastapi
-uvicorn
+uvicorn[standard]
+python-multipart
 python-dotenv
+
+# LangChain + LLM
 langchain
 langchain-core
 langchain-openai
 langchain-anthropic
+langchain-google-genai
 langchain-qdrant
 langchain-community
 langgraph
-qdrant-client
+
+# LLM providers
 openai
 anthropic
+google-generativeai
+
+# Vector DB
+qdrant-client
+sentence-transformers
+
+# Redis
 redis
+
+# HTTP
 httpx
+requests
+
+# Utils
 pytz
 dateparser
+pydantic
+
+# Google
+google-auth
