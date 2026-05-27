@@ -985,6 +985,29 @@ def entry_node(state: ChatState) -> ChatState:
             state["action"] = "CHECK_BUSINESS_EMAIL"
             return state
 
+    # ── 6b. Session has business name, user sent city only ────────
+    session_biz = session.get("business_name", "")
+    if session_biz and not session.get("found_place") and not session.get("search_places"):
+        # Check if current message is just a city/location
+        msg_is_city = any(city in msg_lower for city in INDIAN_CITIES)
+        # Also handle sector/area names
+        if not msg_is_city and len(message.split()) <= 4:
+            # Could be area like "Sector 48" or "JMD Megapolis"
+            msg_is_city = not any(w in msg_lower for w in ["kya", "kaise", "kyun", "nahi", "plan", "price"])
+        if msg_is_city:
+            combined = session_biz + " " + message
+            smart = _try_extract_business(combined, {})  # Empty session to force extraction
+            if smart:
+                # Update city in session
+                import re as _re2
+                m = _re2.search(r'city=(.+?)\[/ACTION\]', smart)
+                if m:
+                    session["city"] = m.group(1).strip()
+                    save_session(user_id, session)
+                state["raw_reply"] = smart
+                state["action"] = "SEARCH_BUSINESS"
+                return state
+
     # ── 7a. Google Maps URL → extract place and analyse ──────────
     maps_url = _extract_maps_url(message)
     if maps_url:
@@ -1015,23 +1038,12 @@ def entry_node(state: ChatState) -> ChatState:
     reply = detect_and_respond(user_id, message)
     detected = _detect_action(reply)
     if detected != "RESPOND":
-        session = get_session(user_id)
-        if not _validate_action(detected, state, session):
-            # Validation failed — ask LLM for natural response
-            if not state.get("raw_reply"):
-                fallback_reply = _llm_reply(
-                    user_id,
-                    "User ne kuch kaha hai. Naturally respond karo aur poocho kya chahiye."
-                )
-                state["raw_reply"] = fallback_reply or _fallback(user_id)
-            state["action"] = "RESPOND"
-        else:
-            state["action"] = detected
+        state["action"] = detected
         if detected == "FEATURE":
             m = re.search(r'\[ACTION:FEATURE\]type=(\w+)\[/ACTION\]', reply)
             if m:
                 state["feature_type"] = m.group(1)
-        if detected in ("SEARCH_BUSINESS", "CHECK_BUSINESS_EMAIL", "BOOK_DEMO", "CHECK_USER"):
+        if detected in ("SEARCH_BUSINESS", "CHECK_BUSINESS_EMAIL", "BOOK_DEMO", "CHECK_USER", "REGISTER_FRANCHISE", "SEARCH_BY_URL"):
             state["raw_reply"] = reply
         return state
 
