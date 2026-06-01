@@ -45,17 +45,21 @@ def handle_search(user_id: str, session: dict, name: str, city: str) -> str:
 def handle_next_result(user_id: str, session: dict) -> str:
     places = session.get("search_places", [])
     idx = session.get("result_index", 0) + 1
+
     session["result_index"] = idx
     session["confirmed"] = False
     session["found_place"] = None
+
     save_session(user_id, session)
+
     return _format_result(
-        places, idx,
+        places,
+        idx,
         session.get("business_name", ""),
         session.get("city", ""),
-        None, session
+        user_id,   # <-- FIX
+        session
     )
-
 
 def _format_result(places: list, index: int, name: str, city: str, user_id, session: dict) -> str:
     lang = session.get("lang", "hi")
