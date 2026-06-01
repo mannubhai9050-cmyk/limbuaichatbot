@@ -49,23 +49,28 @@ def _llm_interpret_intent(user_id: str, message: str, context: str = "") -> str:
         biz_name = place.get("displayName", {}).get("text", "this business")
 
         if context == "business_confirm":
-            system = (
-                "You are interpreting if a user is confirming or denying their business. "
-                f"The business shown is: {biz_name}. "
-                "Reply with ONLY one word: 'yes' if they are confirming, 'no' if denying, 'other' if unclear."
-            )
+             system = (
+        f"Business shown: {biz_name}. "
+        "Interpret whether the user is confirming or rejecting the business. "
+        "Treat yes, yed, yeb, yep, yup, ya, y, correct, right, confirmed, "
+        "confirm, ok, okay, sure, done, haan, han, ha, bilkul, sahi, yahi hai "
+        "as YES. "
+        "Treat no, nope, nahi, galat, wrong, doosra, alag, not this, not mine "
+        "as NO. "
+        "Reply ONLY with one word: yes, no, or other."
+    )
         else:
-            system = (
-                "Interpret user intent. "
-                "Reply ONLY: 'yes' to proceed, 'no' to decline, 'other' if unclear."
-            )
+             system = (
+        "Interpret user intent. "
+        "Reply ONLY: 'yes' to proceed, 'no' to decline, 'other' if unclear."
+    )
 
         response = llm.invoke([
             SystemMessage(content=system),
             HumanMessage(content=message)
         ])
         result = response.content.strip().lower().split()[0]
-        print(f"[IntentLLM] '{message}' → {result}")
+        print(f"[IntentLLM] message='{message}' result='{result}'")
         if result in ("yes", "no", "other"):
             return result
         return "other"
@@ -820,27 +825,58 @@ def entry_node(state: ChatState) -> ChatState:
 
     # ── 2. Business confirmation ──────────────────────────────────
     if session.get("found_place") and not session.get("confirmed"):
+
+        print(
+            f"[CONFIRM] msg='{message}' "
+            f"found_place={bool(session.get('found_place'))} "
+            f"confirmed={session.get('confirmed')} "
+            f"is_yes={is_yes(message)} "
+            f"is_no={is_no(message)}"
+        )
+
         if is_yes(message):
             session["confirmed"] = True
             save_session(user_id, session)
+
+            print(
+                f"[CONFIRM] SAVED confirmed="
+                f"{get_session(user_id).get('confirmed')}"
+            )
+
             state["action"] = "CONFIRMED"
             return state
+
         elif is_no(message):
             state["action"] = "NEXT_RESULT"
             return state
+
         else:
             # Not a clear yes/no — ask LLM to interpret intent
-            # LLM decides: is user confirming, denying, or asking something else?
-            intent = _llm_interpret_intent(user_id, message, context="business_confirm")
+            intent = _llm_interpret_intent(
+                user_id,
+                message,
+                context="business_confirm"
+            )
+
+            print(f"[CONFIRM] LLM INTENT = {intent}")
+
             if intent == "yes":
                 session["confirmed"] = True
                 save_session(user_id, session)
+
+                print(
+                    f"[CONFIRM] LLM SAVED confirmed="
+                    f"{get_session(user_id).get('confirmed')}"
+                )
+
                 state["action"] = "CONFIRMED"
                 return state
+
             elif intent == "no":
                 state["action"] = "NEXT_RESULT"
                 return state
-            # else: user asked something else — fall through to LLM response
+
+            # else: user asked something else — fall through
 
     # ── 3a. Already confirmed + no analysis → ANALYSE trigger ────
     if session.get("confirmed") and not session.get("analysis"):
