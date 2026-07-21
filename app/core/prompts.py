@@ -9,7 +9,7 @@ def get_main_prompt(session: dict = None, rag_context: str = "") -> str:
     tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     day_after = (now + timedelta(days=2)).strftime("%Y-%m-%d")
     session = session or {}
-    lang = session.get("lang", "hi")
+    lang = session.get("lang", "en")
     prompt = ""  # Always initialize
 
     _LANG_NAMES = {

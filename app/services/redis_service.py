@@ -1,9 +1,31 @@
 import redis
 import json
 from datetime import datetime
+
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
+from redis.retry import Retry
+
 from app.core.config import REDIS_URL, MAX_CHAT_HISTORY, SESSION_TTL, CHAT_TTL
 
-r = redis.from_url(REDIS_URL, decode_responses=True)
+# Cloud Redis idle connections band kar deta hai. Bina resilience config ke,
+# agla command "Connection closed by server" se crash ho jaata tha — jaise
+# SEARCH_BUSINESS jo business MIL jaane ke baad save_session par gir gaya aur
+# user ko galat "not found" dikha diya.
+#
+#   • health_check_interval — har 30s ping, taaki dead connection pehle pakdi jaaye
+#   • socket_keepalive      — TCP keepalive
+#   • retry + retry_on_error — ConnectionError/TimeoutError par khud reconnect+retry
+r = redis.from_url(
+    REDIS_URL,
+    decode_responses=True,
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    socket_keepalive=True,
+    health_check_interval=30,
+    retry=Retry(ExponentialBackoff(cap=2, base=0.1), retries=3),
+    retry_on_error=[RedisConnectionError, RedisTimeoutError],
+)
 
 
 # ── Chat History ──────────────────────────────────────────────────

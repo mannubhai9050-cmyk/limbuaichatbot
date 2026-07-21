@@ -15,6 +15,12 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "")
 WHATSAPP_API_KEY = os.getenv("WHATSAPP_API_KEY", "")
 
+# ── Support contact ───────────────────────────────────────────────
+# NOTE: yeh number pehle 45 jagah hardcoded tha, aur connect.py mein 8 jagah
+# GALAT tha (9283344726 — digit 4/5 ulte). Ab sirf yahan se aayega.
+SUPPORT_PHONE = os.getenv("SUPPORT_PHONE", "9289344726")
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "info@limbu.ai")
+
 # ── Limbu.ai API ──────────────────────────────────────────────────
 LIMBU_API_BASE = "https://limbu.ai/api"
 LIMBU_ADMIN_EMAIL = "info@limbu.ai"

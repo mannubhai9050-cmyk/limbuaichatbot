@@ -1,0 +1,371 @@
+{
+  "_readme": [
+    "Poora chatbot flow. Code mein koi text/price nahi — sab yahan.",
+    "",
+    "FLOW (jaisa user ne diya):",
+    "  WELCOME (grow? Yes/No)",
+    "    Yes -> business naam+city / maps link -> confirm (Yes / doosra dikhao)",
+    "    Yes -> analyse? -> connect ask -> video -> connect link -> verify",
+    "    verified -> health report -> magic QR -> insights -> website -> review reply",
+    "    -> plans -> plan detail -> buy / talk to sales",
+    "",
+    "FEATURE CHAIN: har feature async deliver hota hai. Backend result bhejta hai,",
+    "phir 'features.chain' ke hisaab se agle feature ka button dikhta hai.",
+    "",
+    "LIMITS (loader startup par check karta hai):",
+    "  buttons max 3 | button title max 20 chars | list rows max 10 | row title max 24",
+    "",
+    "MEDIA: <<<...>>> wale URL placeholder hain — asli URL daalne par hi bhejenge."
+  ],
+
+  "version": 2,
+  "start": "WELCOME",
+
+  "features": {
+    "_note": "Feature chain ka dimaag. map: button -> feature. chain: feature deliver hone ke baad kaunsa screen. labels: 'preparing...' message ke liye.",
+    "map": {
+      "VIEW_HEALTH":   "health_score",
+      "GEN_QR":        "magic_qr",
+      "VIEW_INSIGHTS": "insights",
+      "GEN_WEBSITE":   "website",
+      "AI_REVIEWS":    "review_reply"
+    },
+    "chain": {
+      "health_score": "HEALTH_DONE",
+      "magic_qr":     "QR_DONE",
+      "insights":     "INSIGHTS_DONE",
+      "website":      "WEBSITE_DONE",
+      "review_reply": "REVIEW_DONE"
+    },
+    "labels": {
+      "health_score": { "hi": "Full Health Report", "en": "Full Health Report" },
+      "magic_qr":     { "hi": "Magic QR Code",       "en": "Magic QR Code" },
+      "insights":     { "hi": "Google Insights",     "en": "Google Insights" },
+      "website":      { "hi": "Free Website",        "en": "Free Website" },
+      "review_reply": { "hi": "AI Review Reply",     "en": "AI Review Reply" }
+    }
+  },
+
+  "texts": {
+    "_note": "Actions ke bheje hue messages.",
+
+    "analyse_fallback": {
+      "hi": "Aapki *Complete Google Business Health Report* banane ke liye aapki Google Business Profile connect karni hogi.\n\nKya main aage badhoon?",
+      "en": "To generate your *Complete Google Business Health Report*, I need to connect your Google Business Profile.\n\nShall I go ahead?"
+    },
+    "connect_body": {
+      "hi": "Upar video dekhein, phir *Connect Now* dabakar Google se login karein.\n\n(Wahi Gmail use karein jisme aapki Google Business Profile hai)",
+      "en": "Watch the video above, then tap *Connect Now* and log in with Google.\n\n(Use the same Gmail that has your Google Business Profile)"
+    },
+    "connect_button": {
+      "hi": "Connect Now",
+      "en": "Connect Now"
+    },
+    "verifying": {
+      "hi": "⏳ Aapki Google Business Profile verify kar rahi hoon...",
+      "en": "⏳ Verifying your Google Business Profile..."
+    },
+    "connected": {
+      "hi": "🎉 Badhaai ho! Aapki Google Business Profile jud gayi.\n{{biz_list}}",
+      "en": "🎉 Congratulations! Your Google Business Profile is connected.\n{{biz_list}}"
+    },
+    "feature_wait": {
+      "hi": "Theek hai! *{{feature_label}}* tayyar kar rahi hoon... ⏳",
+      "en": "Sure! Preparing your *{{feature_label}}*... ⏳"
+    },
+    "payment_link": {
+      "hi": "*{{plan_title}}* ke liye payment link:\n\n🔗 {{payment_url}}\n\nPayment ke baad sab apne aap chalu ho jaayega.",
+      "en": "Payment link for *{{plan_title}}*:\n\n🔗 {{payment_url}}\n\nEverything activates automatically after payment."
+    },
+    "error_generic": {
+      "hi": "Maafi chahti hoon, kuch technical problem aa gayi. 😔\nDobara try karein ya call karein: 📞 {{support_phone}}",
+      "en": "Sorry, something went wrong technically. 😔\nPlease try again or call us: 📞 {{support_phone}}"
+    }
+  },
+
+  "screens": {
+
+    "WELCOME": {
+      "type": "buttons",
+      "body": {
+        "hi": "Hi 👋\n\nMain *Priya* hoon, *Limbu.ai* se.\n\nMain businesses ko online badhne mein madad karti hoon — Google Business Profile, Facebook, Instagram aur AI Automation ke zariye.\n\nKya aap apna business badhana chahenge?",
+        "en": "Hi 👋\n\nI'm *Priya* from *Limbu.ai*.\n\nI help businesses grow online — through Google Business Profile, Facebook, Instagram, and AI Automation.\n\nWould you like to grow your business?"
+      },
+      "buttons": [
+        { "id": "YES_GROW", "title": { "hi": "✅ Haan", "en": "✅ Yes" }, "next": "ASK_BUSINESS" },
+        { "id": "NO_GROW",  "title": { "hi": "❌ Nahi", "en": "❌ No" },  "next": "GOODBYE" }
+      ]
+    },
+
+    "GOODBYE": {
+      "type": "text",
+      "body": {
+        "hi": "Koi baat nahi 😊\n\nJab bhi tayyar hon, bas *Hi* bhej dijiye — main madad ke liye haazir hoon.",
+        "en": "No problem 😊\n\nWhenever you're ready, just send *Hi* and I'll be happy to help you."
+      }
+    },
+
+    "ASK_BUSINESS": {
+      "type": "input",
+      "body": {
+        "hi": "Bahut badhiya! 😊\n\nIn mein se koi ek bhejein:\n\n• *Business Name + City* (jaise: ABC Dental Clinic, Delhi)\n\nYA\n\n• Google Business Profile link",
+        "en": "Great! 😊\n\nPlease send :\n\n• *Business Name + City* (e.g., ABC Dental Clinic, Delhi)\n\nOR\n\n• Google Business Profile link"
+      },
+      "action": "SEARCH_BUSINESS",
+      "next": "CONFIRM_BUSINESS",
+      "on_error": "BUSINESS_NOT_FOUND"
+    },
+
+    "ASK_CITY": {
+      "type": "input",
+      "body": {
+        "hi": "Aapka business kis *city* mein hai?\n\n(Jaise: Delhi)",
+        "en": "Which *city* is your business in?\n\n(e.g., Delhi)"
+      },
+      "action": "SEARCH_WITH_CITY",
+      "next": "CONFIRM_BUSINESS",
+      "on_error": "BUSINESS_NOT_FOUND"
+    },
+
+    "CONFIRM_BUSINESS": {
+      "type": "buttons",
+      "body": {
+        "hi": "Yeh business mila:\n\n📍 *{{biz_name}}*\n⭐ {{biz_rating}}\n📍 {{biz_address}}\n\nKya yeh aapka business hai?",
+        "en": "I found this business:\n\n📍 *{{biz_name}}*\n⭐ {{biz_rating}}\n📍 {{biz_address}}\n\nIs this your business?"
+      },
+      "buttons": [
+        { "id": "BIZ_YES",  "title": { "hi": "✅ Haan, yahi hai", "en": "✅ Yes, this is it" }, "next": "ANALYSE_ASK" },
+        { "id": "BIZ_NEXT", "title": { "hi": "🔁 Doosra dikhao",  "en": "🔁 Show another" },  "next": "CONFIRM_BUSINESS", "action": "NEXT_RESULT" }
+      ]
+    },
+
+    "BUSINESS_NOT_FOUND": {
+      "type": "buttons",
+      "input_action": "SEARCH_BUSINESS",
+      "input_next": "CONFIRM_BUSINESS",
+      "input_error": "BUSINESS_NOT_FOUND",
+      "body": {
+        "hi": "Yeh business Google par nahi mila. 😔\n\nSahi *Business Name + City* ya apni Google Business Profile link dobara bhejein.",
+        "en": "Couldn't find this business on Google. 😔\n\nPlease send the correct *Business Name + City* or your Google Business Profile link."
+      },
+      "buttons": [
+        { "id": "BIZ_RETRY", "title": { "hi": "🔁 Dobara bhejein", "en": "🔁 Send again" }, "next": "ASK_BUSINESS" },
+        { "id": "TALK_HUMAN", "title": { "hi": "📞 Baat karein",   "en": "📞 Talk to us" }, "next": "SUPPORT" }
+      ]
+    },
+
+    "ANALYSE_ASK": {
+      "type": "buttons",
+      "body": {
+        "hi": "Perfect! 🎉\n\nKya main aapki *Google Business Profile* ko analyze karun?",
+        "en": "Perfect! 🎉\n\nWould you like me to analyze your *Google Business Profile*?"
+      },
+      "buttons": [
+        { "id": "ANALYSE_YES", "title": { "hi": "✅ Haan", "en": "✅ Yes" }, "next": "ANALYSE" },
+        { "id": "ANALYSE_NO",  "title": { "hi": "❌ Nahi", "en": "❌ No" },  "next": "LATER_MENU" }
+      ]
+    },
+
+    "ANALYSE": {
+      "type": "action",
+      "action": "ANALYSE",
+      "next": "CONNECT_ASK",
+      "on_error": "CONNECT_ASK"
+    },
+
+    "CONNECT_ASK": {
+      "_note": "body = analyse report (ANALYSE action se {{report}}) + niche buttons. Video yahan NAHI — Connect Business dabane par CONNECT_SEND bhejta hai.",
+      "type": "buttons",
+      "body": {
+        "hi": "{{report}}",
+        "en": "{{report}}"
+      },
+      "buttons": [
+        { "id": "CONNECT_GO",    "title": { "hi": "🔗 Business jodein", "en": "🔗 Connect Business" }, "next": "CONNECT_SEND" },
+        { "id": "CONNECT_LATER", "title": { "hi": "🕒 Baad mein",       "en": "🕒 Later" },           "next": "LATER_MENU" }
+      ]
+    },
+
+    "CONNECT_SEND": {
+      "_note": "VIDEO YAHAN BADLEIN — media.url mein apna .mp4 daalein. Connect Business dabane par yeh video + Connect Now URL button bhejta hai.",
+      "type": "action",
+      "action": "SEND_CONNECT_LINK",
+      "media": {
+        "type": "video",
+        "url": "https://res.cloudinary.com/do6rl698f/video/upload/v1784637475/WhatsApp_Video_2026-07-21_at_2.17.31_PM_y4swsi.mp4"
+      },
+      "next": "CONNECT_PENDING",
+      "on_error": "SUPPORT"
+    },
+
+    "CONNECT_PENDING": {
+      "_note": "Ab polling auto-detect karti hai — 'Done' button ki zaroorat nahi. Connect hote hi bot khud report bhej deta hai.",
+      "type": "buttons",
+      "followup": "CONNECT_PENDING",
+      "body": {
+        "hi": "Upar *Connect Now* 👆 dabakar Google se login karein aur *Allow* dabayein.\n\nBas! Connect hote hi main *apne aap* aapki Full Health Report bhej dungi — kuch aur dabane ki zaroorat nahi. 🎉",
+        "en": "Tap *Connect Now* 👆 above, log in with Google and tap *Allow*.\n\nThat's it! The moment you connect, I'll *automatically* send your Full Health Report — no need to tap anything else. 🎉"
+      },
+      "buttons": [
+        { "id": "NEED_HELP", "title": { "hi": "❓ Madad chahiye", "en": "❓ Need Help" }, "next": "SUPPORT" }
+      ]
+    },
+
+    "CONNECT_NOT_YET": {
+      "type": "buttons",
+      "body": {
+        "hi": "Abhi tak connect nahi hua. 🤔\n\nLink kholkar Google se login karein aur *Allow* dabayein.",
+        "en": "Not connected yet. 🤔\n\nOpen the link, log in with Google and tap *Allow*."
+      },
+      "buttons": [
+        { "id": "CONNECT_CHECK", "title": { "hi": "✅ Ab check karo", "en": "✅ Check again" }, "next": "CONNECT_SUCCESS", "action": "CHECK_CONNECTION", "on_error": "CONNECT_NOT_YET" },
+        { "id": "CONNECT_GO",    "title": { "hi": "🔗 Link dobara",   "en": "🔗 Resend link" }, "next": "CONNECT_SEND" },
+        { "id": "NEED_HELP",     "title": { "hi": "❓ Madad chahiye",  "en": "❓ Need Help" },   "next": "SUPPORT" }
+      ]
+    },
+
+    "CONNECT_SUCCESS": {
+      "_note": "Connect hote hi Full Health Report AUTO chalu — user ko button nahi dabana padta. check_connection pehle 'Congratulations connected' bhej deta hai.",
+      "type": "action",
+      "action": "START_HEALTH",
+      "next": "HEALTH_DONE",
+      "on_error": "FEATURE_FAILED"
+    },
+
+    "HEALTH_DONE": {
+      "type": "buttons",
+      "body": {
+        "hi": "✅ Aapki *Full Health Report* bhej di hai.\n\nIsme shaamil hai:\n✅ Health Score\n✅ Missing Information\n✅ SEO Suggestions\n✅ Review Analysis\n✅ Profile Tips\n\nAb main aapka *Magic QR Code* bana doon?",
+        "en": "✅ Your *Full Health Report* is sent.\n\nIt includes:\n✅ Health Score\n✅ Missing Information\n✅ SEO Suggestions\n✅ Review Analysis\n✅ Profile Tips\n\nShall I generate your *Magic QR Code* now?"
+      },
+      "buttons": [
+        { "id": "GEN_QR",    "title": { "hi": "✨ Magic QR banao", "en": "✨ Generate QR" }, "next": "QR_DONE", "action": "TRIGGER_FEATURE", "on_error": "FEATURE_FAILED" },
+        { "id": "VIEW_PLANS", "title": { "hi": "💰 Plans dekhein",  "en": "💰 View Plans" }, "next": "PLANS" }
+      ]
+    },
+
+    "QR_DONE": {
+      "type": "buttons",
+      "body": {
+        "hi": "✅ Aapka *Magic QR Code* tayyar hai!\n\nCustomers ise scan karke turant Google Review de sakte hain.\n\nAb *Google Insights & Performance* dikhaoon?",
+        "en": "✅ Your *Magic QR Code* is ready!\n\nCustomers can scan it and leave Google Reviews instantly.\n\nShall I show your *Google Insights & Performance*?"
+      },
+      "buttons": [
+        { "id": "VIEW_INSIGHTS", "title": { "hi": "📈 Insights dekho", "en": "📈 View Insights" }, "next": "INSIGHTS_DONE", "action": "TRIGGER_FEATURE", "on_error": "FEATURE_FAILED" },
+        { "id": "VIEW_PLANS",    "title": { "hi": "💰 Plans dekhein",  "en": "💰 View Plans" },    "next": "PLANS" }
+      ]
+    },
+
+    "INSIGHTS_DONE": {
+      "type": "buttons",
+      "body": {
+        "hi": "✅ Yeh rahe aapke *Google Business Insights*.\n\nAap track kar sakte hain:\n• Views\n• Calls\n• Website Clicks\n• Direction Requests\n• Search Performance\n\nAb main aapki *Free Website* bana doon?",
+        "en": "✅ Here are your *Google Business Insights*.\n\nYou can track:\n• Views\n• Calls\n• Website Clicks\n• Direction Requests\n• Search Performance\n\nShall I generate your *Free Website* now?"
+      },
+      "buttons": [
+        { "id": "GEN_WEBSITE", "title": { "hi": "🌐 Website banao", "en": "🌐 Free Website" }, "next": "WEBSITE_DONE", "action": "TRIGGER_FEATURE", "on_error": "FEATURE_FAILED" },
+        { "id": "VIEW_PLANS",  "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" },  "next": "PLANS" }
+      ]
+    },
+
+    "WEBSITE_DONE": {
+      "type": "buttons",
+      "body": {
+        "hi": "✅ Aapki *AI Business Website* tayyar hai!\n\nIsme shaamil hai:\n✅ Business Info\n✅ Services\n✅ Reviews\n✅ Contact Details\n✅ Google Maps\n✅ WhatsApp Button\n\nAb *AI Review Reply System* setup karoon?",
+        "en": "✅ Your *AI Business Website* is ready!\n\nIt includes:\n✅ Business Info\n✅ Services\n✅ Reviews\n✅ Contact Details\n✅ Google Maps\n✅ WhatsApp Button\n\nShall I set up the *AI Review Reply System*?"
+      },
+      "buttons": [
+        { "id": "AI_REVIEWS", "title": { "hi": "⭐ Review Reply",  "en": "⭐ Review Reply" }, "next": "REVIEW_DONE", "action": "TRIGGER_FEATURE", "on_error": "FEATURE_FAILED" },
+        { "id": "VIEW_PLANS", "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" },  "next": "PLANS" }
+      ]
+    },
+
+    "REVIEW_DONE": {
+      "type": "buttons",
+      "body": {
+        "hi": "✅ *AI Review Reply System* ab aapke Google Reviews ke professional jawab apne aap de sakta hai.\n\nTez jawab, behtar customer engagement.\n\nAage kya karein?",
+        "en": "✅ The *AI Review Reply System* can now auto-generate professional replies to your Google Reviews.\n\nFaster replies, better engagement.\n\nWhat next?"
+      },
+      "buttons": [
+        { "id": "VIEW_PLANS",  "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" },     "next": "PLANS" },
+        { "id": "TALK_HUMAN",  "title": { "hi": "📞 Expert se baat", "en": "📞 Talk to Expert" }, "next": "SUPPORT" }
+      ]
+    },
+
+    "FEATURE_FAILED": {
+      "type": "buttons",
+      "body": {
+        "hi": "Maafi chahti hoon, abhi yeh nahi ban paaya. 😔\n\nDobara try karein ya hamein call karein: 📞 {{support_phone}}",
+        "en": "Sorry, that didn't work right now. 😔\n\nPlease try again or call us: 📞 {{support_phone}}"
+      },
+      "buttons": [
+        { "id": "VIEW_PLANS", "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" },     "next": "PLANS" },
+        { "id": "TALK_HUMAN", "title": { "hi": "📞 Baat karein",   "en": "📞 Talk to Expert" }, "next": "SUPPORT" }
+      ]
+    },
+
+    "LATER_MENU": {
+      "type": "buttons",
+      "body": {
+        "hi": "Koi baat nahi! 😊\n\nJab tayyar hon, hum aapke liye hain. Tab tak:",
+        "en": "No problem! 😊\n\nWe're here whenever you're ready. Meanwhile:"
+      },
+      "buttons": [
+        { "id": "VIEW_PLANS", "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" },     "next": "PLANS" },
+        { "id": "TALK_HUMAN", "title": { "hi": "📞 Expert se baat", "en": "📞 Talk to Expert" }, "next": "SUPPORT" }
+      ]
+    },
+
+    "PLANS": {
+      "type": "buttons",
+      "body": {
+        "hi": "Apne business ke liye best plan chunein 👇\n\n(Saare plans par GST alag se, yearly par *20% off*)",
+        "en": "Choose the best plan for your business 👇\n\n(GST extra on all plans, *20% off* yearly)"
+      },
+      "buttons": [
+        { "id": "PLAN_BASIC",   "title": { "hi": "🥉 Basic",        "en": "🥉 Basic" },        "next": "PLAN_DETAIL" },
+        { "id": "PLAN_PRO",     "title": { "hi": "🥈 Professional", "en": "🥈 Professional" }, "next": "PLAN_DETAIL" },
+        { "id": "PLAN_PREMIUM", "title": { "hi": "🥇 Premium",      "en": "🥇 Premium" },      "next": "PLAN_DETAIL" }
+      ]
+    },
+
+    "PLAN_DETAIL": {
+      "type": "buttons",
+      "action": "LOAD_PLAN",
+      "plan_map": {
+        "PLAN_BASIC": "basic plan",
+        "PLAN_PRO": "professional plan",
+        "PLAN_PREMIUM": "premium plan"
+      },
+      "body": {
+        "hi": "Bahut badhiya choice! 🎉\n\n*{{plan_title}}*\n💰 ₹{{plan_price}}/month + GST ₹{{plan_gst}}\n📦 Total: ₹{{plan_total}}\n\n📝 {{plan_posts}} posts/month\n🔗 {{plan_citations}} citations\n{{plan_features}}",
+        "en": "Excellent choice! 🎉\n\n*{{plan_title}}*\n💰 ₹{{plan_price}}/month + GST ₹{{plan_gst}}\n📦 Total: ₹{{plan_total}}\n\n📝 {{plan_posts}} posts/month\n🔗 {{plan_citations}} citations\n{{plan_features}}"
+      },
+      "buttons": [
+        { "id": "PLAN_BUY",   "title": { "hi": "💳 Abhi lein",    "en": "💳 Buy Now" },      "next": "PLAN_PAY", "action": "SEND_PAYMENT_LINK", "on_error": "SUPPORT" },
+        { "id": "TALK_SALES", "title": { "hi": "📞 Sales se baat", "en": "📞 Talk to Sales" }, "next": "SUPPORT" },
+        { "id": "VIEW_PLANS", "title": { "hi": "🔙 Doosra plan",   "en": "🔙 Other plans" },  "next": "PLANS" }
+      ]
+    },
+
+    "PLAN_PAY": {
+      "type": "buttons",
+      "body": {
+        "hi": "Payment link bhej di hai 👆\n\nPayment ke baad sab apne aap chalu ho jaayega.",
+        "en": "Payment link sent 👆\n\nEverything activates automatically after payment."
+      },
+      "buttons": [
+        { "id": "TALK_HUMAN", "title": { "hi": "📞 Madad chahiye", "en": "📞 Need help" }, "next": "SUPPORT" }
+      ]
+    },
+
+    "SUPPORT": {
+      "type": "text",
+      "body": {
+        "hi": "Hamari team se baat karein:\n📞 {{support_phone}}\n✉️ {{support_email}}\n\nYa yahin apna sawaal likh dijiye — main jawab dungi. 😊",
+        "en": "Talk to our team:\n📞 {{support_phone}}\n✉️ {{support_email}}\n\nOr just type your question here — I'll answer. 😊"
+      }
+    }
+
+  }
+}

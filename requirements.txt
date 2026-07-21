@@ -1,39 +1,42 @@
 # Core framework
 fastapi
 uvicorn[standard]
-python-multipart
 python-dotenv
+pydantic
 
-# LangChain + LLM
-langchain
+# LLM (sirf AI fallback ke liye — button flow LLM use nahi karta)
 langchain-core
 langchain-openai
 langchain-anthropic
-langchain-google-genai
-langchain-qdrant
-langchain-community
-langgraph
-
-# LLM providers
 openai
 anthropic
-google-generativeai
 
-# Vector DB
+# Vector DB (RAG — AI fallback ke knowledge ke liye)
 qdrant-client
-sentence-transformers
 
-# Redis
+# Redis — sessions, dedup, followup queue
 redis
 
 # HTTP
 httpx
-requests
 
 # Utils
 pytz
-dateparser
-pydantic
 
-# Google
-google-auth
+# Tests
+pytest
+fakeredis
+
+# NOTE: versions abhi pinned nahi hain. Production deploy se pehle
+# `pip freeze > requirements.lock` karke lock kar lena chahiye, warna
+# koi upstream release kabhi bhi build tod sakta hai.
+#
+# Hataye gaye (ab use nahi hote):
+#   langchain, langgraph        -> flow engine ne graph.py ki jagah le li
+#   langchain-qdrant/community  -> qdrant-client seedha use hota hai
+#   sentence-transformers       -> embeddings OpenAI se aate hain
+#   langchain-google-genai      -> kabhi use hi nahi hua
+#   google-generativeai         -> kabhi use hi nahi hua
+#   dateparser                  -> demo ki date ab buttons se aati hai
+#   google-auth, requests       -> koi import nahi tha
+#   python-multipart            -> koi form upload nahi hai

@@ -1,19 +1,44 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from dotenv import load_dotenv
+import ast
+import json
+import logging
 import uuid
+from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from app.graph import chat
+from app.flow import engine, loader
 from app.services.redis_service import (
-    get_history, clear_history, get_all_users,
-    r, get_session, save_message, save_session
+    clear_history, get_all_users, get_history, get_session, save_session,
 )
 
-app = FastAPI(title="Limbu.ai WhatsApp Chatbot", version="5.0.0")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+)
+log = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Flow import ke waqt hi validate ho chuka hai — yahan sirf report.
+    log.info("Flow loaded: %d screens, start=%s",
+             len(loader.FLOW["screens"]), loader.start_screen())
+    try:
+        from app.services.knowledge_base import setup_knowledge_base
+        log.info("Knowledge base: %s", "ready" if setup_knowledge_base() else "unavailable")
+    except Exception as e:
+        log.warning("Knowledge base skipped: %s", e)
+
+    from app.services.followup_service import start_sweeper
+    start_sweeper()
+    yield
+
+
+app = FastAPI(title="Limbu.ai WhatsApp Chatbot", version="6.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,258 +49,139 @@ app.add_middleware(
 )
 
 
-class ChatRequest(BaseModel):
-    message: str
-    user_id: str = None
-
-
-@app.on_event("startup")
-def startup():
-    print("🚀 Limbu.ai Chatbot v5 starting...")
-
-# Initialize knowledge base on startup
-try:
-    from app.services.knowledge_base import setup_knowledge_base
-    kb_ok = setup_knowledge_base()
-    print(f"[KB] Knowledge base: {'✅ Ready' if kb_ok else '⚠️ Unavailable (Qdrant not connected)'}")
-except Exception as e:
-    print(f"[KB] Knowledge base skipped: {e}")
-    print("✅ Ready!")
-
-
-@app.get("/")
-def root():
-    return {"message": "Limbu.ai Chatbot API v5 🚀", "admin": "/admin"}
-
-
-@app.post("/chat")
-def chat_endpoint(req: ChatRequest):
-    user_id = req.user_id or str(uuid.uuid4())
-    if not req.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
-    response = chat(user_id, req.message)
-    return {"response": response, "user_id": user_id, "status": "ok"}
-
-
+# ── Webhook parsing ───────────────────────────────────────────────
 def _parse_field(val):
-    """Parse value — works whether it's already a dict or a stringified dict"""
+    """Provider kabhi dict bhejta hai, kabhi stringified dict."""
     if isinstance(val, dict):
         return val
     if isinstance(val, str):
-        import ast as _ast, json as _json
-        for parser in [_ast.literal_eval, _json.loads]:
+        for parser in (json.loads, ast.literal_eval):
             try:
-                r = parser(val)
-                if isinstance(r, dict):
-                    return r
+                out = parser(val)
+                if isinstance(out, dict):
+                    return out
             except Exception:
                 pass
     return {}
 
 
-def _extract_template_button_text(body: dict) -> str:
+def _normalize_phone(raw: str) -> str:
+    from app.services.whatsapp_service import normalize_phone
+    return normalize_phone(raw) if raw else ""
+
+
+def _extract(body: dict) -> tuple:
     """
-    Extract text from WhatsApp template button responses.
-    When user clicks a button, WA sends special payload.
-    Formats seen:
-    - message.type = "interactive" with message.interactive.button_reply.title
-    - message.type = "button" with message.button.text
-    - message.button_reply.title
+    Webhook se (user_id, phone, text, button_payload) nikalo.
+
+    Button click par provider bhejta hai:
+        message.type = "button"
+        message.button_text    = "Confirm Order"   <- label (badal sakta hai)
+        message.button_payload = "confirm_order"   <- ID (fix rehta hai)
+
+    PURANA CODE button_text ko preference deta tha aur payload ko sirf fallback
+    rakhta tha — isi wajah se graph.py mein "intrested"/"i am intrested" jaisi
+    spelling lists banani padi thi. Ab payload hi asli signal hai.
     """
+    contact = _parse_field(body.get("contact") or {})
+    phone = _normalize_phone(
+        contact.get("phone") or contact.get("wa_id") or body.get("phone") or ""
+    )
+
     msg = _parse_field(body.get("message") or {})
-    msg_type = msg.get("type", "")
 
-    # Interactive button reply
-    if msg_type == "interactive":
+    # 1. Template quick-reply: id seedha aata hai (button_payload / button_reply.id)
+    payload = str(msg.get("button_payload") or "").strip()
+    if not payload:
         interactive = _parse_field(msg.get("interactive") or {})
-        btn_reply = _parse_field(interactive.get("button_reply") or {})
-        if btn_reply.get("title"):
-            return btn_reply["title"]
-        list_reply = _parse_field(interactive.get("list_reply") or {})
-        if list_reply.get("title"):
-            return list_reply["title"]
+        for key in ("button_reply", "list_reply"):
+            reply = _parse_field(interactive.get(key) or {})
+            if reply.get("id"):
+                payload = str(reply["id"]).strip()
+                break
 
-    # Button reply
-    if msg_type == "button":
-        btn = _parse_field(msg.get("button") or {})
-        if btn.get("text"):
-            return btn["text"]
-        if btn.get("payload"):
-            return btn["payload"]
+    text = ""
+    if not payload:
+        text = str(
+            msg.get("content") or msg.get("text") or msg.get("body")
+            or body.get("content") or body.get("text") or ""
+        ).strip()
 
-    # Direct button_reply in message
-    btn_reply = _parse_field(msg.get("button_reply") or {})
-    if btn_reply.get("title"):
-        return btn_reply["title"]
+    # 2. Interactive button tap: platform id NAHI bhejta, sirf title 'content'
+    #    mein aur type='interactive'. Title ko current screen ke buttons se
+    #    match karke id nikaalo — warna bot ise free text samajh kar AI chala
+    #    deta hai (do message, loop).
+    msg_type = str(msg.get("type") or "").strip().lower()
+    is_button_tap = msg_type in ("interactive", "button") and bool(text)
 
-    return ""
+    user_id = f"wa_{phone}" if phone else (body.get("user_id") or str(uuid.uuid4()))
+    return user_id, phone, text, payload, is_button_tap
 
 
-async def _process_template_button(body: dict) -> dict:
-    """Handle template_button_reply event"""
+# ── Dedup ─────────────────────────────────────────────────────────
+def _is_duplicate(wamid: str) -> bool:
+    """
+    Redis-backed dedup.
+
+    NOTE: purana code ek in-memory set use karta tha, jo 1 se zyada worker par
+    kaam hi nahi karta — har worker apna set rakhta aur duplicate nikal jaata.
+    SET NX ek atomic operation hai, saare workers ke liye ek sach.
+    """
+    if not wamid:
+        return False
     try:
-        contact = _parse_field(body.get("contact") or {})
-        phone_raw = str(contact.get("phone") or body.get("phone") or "").strip()
-        phone_norm = phone_raw.replace("+", "").replace(" ", "").replace("-", "")
-        if not phone_norm:
-            return {"status": "error", "detail": "no phone"}
+        from app.services.redis_service import r
+        return not r.set(f"wamid:{wamid}", "1", nx=True, ex=3600)
+    except Exception as e:
+        log.warning("Dedup check fail (message process kar rahe hain): %s", e)
+        return False
 
-        user_id = f"wa_{phone_norm}"
-        template_name = body.get("template_name", "")
-        button_text = body.get("button_text", "") or body.get("button_payload", "")
-        template_body = _parse_field(body.get("template") or {}).get("body", "")
 
-        print(f"[Template Button] user={user_id} template={template_name} button={button_text}")
+async def _process(body: dict) -> dict:
+    log.info("Webhook in: %s", str(body)[:160])
 
-        # Save template context in session
-        from app.services.redis_service import get_session, save_session
-        session = get_session(user_id)
-        session["last_template"] = template_name
-        session["last_template_body"] = template_body
-        session["greeted"] = True
-        session["connect_phone"] = phone_norm
-        if not session.get("lang"):
-            session["lang"] = "hi"
+    wamid = _parse_field(body.get("message") or {}).get("wamid", "")
+    if _is_duplicate(wamid):
+        log.info("Duplicate wamid, skip")
+        return {"status": "duplicate"}
+
+    user_id, phone, text, payload, is_button_tap = _extract(body)
+    if not phone:
+        return {"error": "phone required"}
+    if not text and not payload:
+        return {"status": "ignored", "detail": "no text or button"}
+
+    session = get_session(user_id)
+    if not session.get("connect_phone"):
+        session["connect_phone"] = phone
         save_session(user_id, session)
 
-        # Process button as normal message — graph handles it
-        from app.graph import chat
-        response = chat(user_id, button_text)
+    # Interactive tap: title -> id (current screen ke buttons se). Platform id
+    # nahi bhejta, isliye yahan resolve karna zaroori hai.
+    if not payload and is_button_tap:
+        current = session.get("flow_screen", "")
+        bid = loader.button_by_title(current, text) if current else ""
+        if bid:
+            payload, text = bid, ""
+            log.info("Interactive tap '%s' -> button %s (screen %s)",
+                     body.get("message", {}).get("content", ""), bid, current)
 
-        if phone_norm and response:
-            from app.services.whatsapp_service import send_whatsapp
-            send_whatsapp(phone_norm, response)
+    log.info("user=%s button=%r text=%r", user_id, payload, text[:60])
 
-        return {"status": "ok", "template": template_name, "button": button_text}
-
-    except Exception as e:
-        print(f"[Template Button] Error: {e}")
-        import traceback; traceback.print_exc()
-        return {"status": "error", "detail": str(e)}
+    # engine blocking hai (Redis, HTTP, LLM). Threadpool mein bhejna zaroori —
+    # warna ek slow API poore server ke saare users ko rok deti hai.
+    await run_in_threadpool(engine.handle, user_id, phone, text, payload)
+    return {"status": "ok", "user_id": user_id}
 
 
-async def _process_chat(body: dict, headers) -> dict:
-    """
-    Parse WhatsApp webhook. Exact format:
-    {
-      event, workspace_id,
-      contact: { id, phone },
-      message: { wamid, type, content, timestamp }
-    }
-    contact/message may be dict OR stringified dict string.
-    """
-    print(f"[Webhook] Incoming: {str(body)[:200]}")
-
-    # ── Route by event type ───────────────────────────────────────
-    event = body.get("event", "")
-
-    # Format 1: event = "template_button_reply" (top-level)
-    if event == "template_button_reply":
-        return await _process_template_button(body)
-
-    # Format 2: event = "message.received" with message.type = "button"
-    # message has button_text, button_payload, replied_template
-    if event == "message.received":
-        msg_obj = _parse_field(body.get("message") or {})
-        msg_type = msg_obj.get("type", "")
-        if msg_type == "button" and msg_obj.get("button_text"):
-            # Extract template info from replied_template
-            replied_template = _parse_field(msg_obj.get("replied_template") or {})
-            template_body = {
-                "event": "template_button_reply",
-                "template_name": replied_template.get("template_name", ""),
-                "button_text": msg_obj.get("button_text", ""),
-                "button_payload": msg_obj.get("button_payload", ""),
-                "contact": body.get("contact", {}),
-                "template": replied_template,
-            }
-            print(f"[Webhook] Button message detected → routing to template handler")
-            return await _process_template_button(template_body)
-
-    # ── Dedup by wamid — prevent double processing ────────────────
-    from app.graph import _is_duplicate
-    msg_obj_raw = _parse_field(body.get("message") or {})
-    wamid = msg_obj_raw.get("wamid", "")
-    if wamid and _is_duplicate(wamid):
-        print(f"[Webhook] Duplicate wamid={wamid[:30]}, skipping")
-        return {"status": "duplicate", "skipped": True}
-
-    # ── contact → phone ───────────────────────────────────────────
-    contact = _parse_field(body.get("contact") or {})
-    phone_raw = (
-        contact.get("phone") or contact.get("wa_id") or
-        body.get("phone") or body.get("from") or
-        body.get("sender") or body.get("waId") or ""
-    )
-    phone_norm = ""
-    if phone_raw:
-        phone_norm = str(phone_raw).replace("+", "").replace(" ", "").replace("-", "")
-        if not phone_norm.startswith("91") and len(phone_norm) == 10:
-            phone_norm = "91" + phone_norm
-
-    # ── message → text ────────────────────────────────────────────
-    # Check template button click first
-    btn_text = _extract_template_button_text(body)
-
-    msg = _parse_field(body.get("message") or {})
-    raw_text = str(
-        msg.get("content") or msg.get("text") or
-        msg.get("body") or msg.get("caption") or
-        body.get("content") or body.get("text") or
-        body.get("body") or ""
-    ).strip()
-
-    # Use button text if available, else raw text
-    message = btn_text or raw_text
-
-    if not message:
-        print(f"[Webhook] No text — msg={msg} body_keys={list(body.keys())}")
-        return {"error": "message required"}
-
-    # ── user_id from phone ────────────────────────────────────────
-    if phone_norm:
-        user_id = f"wa_{phone_norm}"
-    else:
-        user_id = body.get("user_id") or str(headers.get("X-User-ID", "")) or str(uuid.uuid4())
-
-    # Save phone in session
-    if phone_norm:
-        sess = get_session(user_id)
-        if not sess.get("connect_phone"):
-            sess["connect_phone"] = phone_norm
-            save_session(user_id, sess)
-
-    print(f"[Webhook] OK user={user_id} phone={phone_norm} msg={message[:60]}")
-    response = chat(user_id, message)
-
-    # ── Send reply via WhatsApp ───────────────────────────────────
-    if phone_norm and response:
-        from app.services.whatsapp_service import send_whatsapp
-        sent = send_whatsapp(phone_norm, response)
-        print(f"[Webhook] WA send to {phone_norm}: {'OK' if sent else 'FAILED'}")
-
-    return {"response": response, "user_id": user_id, "status": "ok"}
 @app.post("/webhook/chat")
-async def webhook_chat(request: Request):
-    """Main chat webhook"""
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-    result = await _process_chat(body, request.headers)
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
-    return result
-
-
 @app.post("/webhook/whatsapp")
-async def webhook_whatsapp(request: Request):
-    """WhatsApp webhook — alias for /webhook/chat"""
+async def webhook(request: Request):
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-    result = await _process_chat(body, request.headers)
+    result = await _process(body)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
@@ -283,136 +189,61 @@ async def webhook_whatsapp(request: Request):
 
 @app.post("/webhook/action-complete")
 async def webhook_action_complete(request: Request):
-    """
-    Called by Limbu.ai when a dashboard action completes.
-    Payload: { phone, action, status, result: { url, reviewUrl, pdf_url, text, ... } }
-    """
-    try:
-        body = await request.json()
-        print(f"[Webhook Action] Received: {body}")
+    """Limbu dashboard se action complete hone par result deliver karo."""
+    body = await request.json()
+    phone = _normalize_phone(body.get("phone", ""))
+    action = body.get("action", "")
+    if not phone or not action:
+        raise HTTPException(status_code=400, detail="phone and action required")
 
-        phone = body.get("phone", "").replace("+", "").replace(" ", "")
-        action = body.get("action", "")
-        status = body.get("status", "")
-        result_data = body.get("result", {})
+    if body.get("status") != "success":
+        return {"status": "ignored"}
 
-        if not phone or not action:
-            return {"status": "error", "detail": "phone and action required"}
+    user_id = f"wa_{phone}"
+    if not get_session(user_id):
+        log.warning("action-complete: user nahi mila phone=%s", phone[-4:])
+        return {"status": "user_not_found"}
 
-        if not phone.startswith("91") and len(phone) == 10:
-            phone = "91" + phone
-
-        # Find user by phone — try multiple formats
-        user_id = None
-        for candidate in [f"wa_{phone}", f"wa_{phone[2:]}" if phone.startswith("91") else None]:
-            if candidate and get_session(candidate):
-                user_id = candidate
-                break
-
-        # Last resort: scan all sessions
-        if not user_id:
-            for key in r.keys("session:*"):
-                uid = key.replace("session:", "") if isinstance(key, str) else key.decode().replace("session:", "")
-                s = get_session(uid)
-                if s.get("connect_phone") == phone:
-                    user_id = uid
-                    break
-
-        if not user_id:
-            print(f"[Webhook Action] No user found for phone: {phone}")
-            return {"status": "user_not_found", "phone": phone}
-
-        if status != "success":
-            return {"status": "ok", "detail": "non-success status ignored"}
-
-        from app.services.actions_service import deliver_from_webhook
-        action_id = body.get("actionId", "")
-        deliver_from_webhook(user_id, phone, action, result_data, action_id)
-
-        print(f"[Webhook Action] Delivered {action} to {user_id}")
-        return {"status": "ok", "user_id": user_id, "action": action}
-
-    except Exception as e:
-        print(f"[Webhook Action] Error: {e}")
-        import traceback; traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+    from app.services.actions_service import deliver_from_webhook
+    await run_in_threadpool(
+        deliver_from_webhook, user_id, phone, action,
+        body.get("result", {}), body.get("actionId", ""),
+    )
+    return {"status": "ok"}
 
 
 @app.post("/webhook/connected")
 async def webhook_connected(request: Request):
-    """Called by Limbu.ai when user completes Google OAuth connect"""
-    try:
-        body = await request.json()
-        phone = body.get("phone", "").replace("+", "").replace(" ", "")
-        status = body.get("status", "success")
-        email = body.get("email", "")
+    """Limbu se: user ne Google OAuth complete kar liya."""
+    body = await request.json()
+    phone = _normalize_phone(body.get("phone", ""))
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone required")
 
-        if not phone:
-            raise HTTPException(status_code=400, detail="phone required")
+    user_id = f"wa_{phone}"
+    session = get_session(user_id)
+    if not session:
+        return {"status": "user_not_found"}
 
-        # Normalize phone — ensure 91 prefix
-        if not phone.startswith("91") and len(phone) == 10:
-            phone = "91" + phone
-
-        from app.nodes.connect import handle_check_latest_connection, handle_connect_link
-
-        # Find user_id by phone (wa_917740847114 format)
-        user_id = f"wa_{phone}"
-
-        # Also check without 91 prefix as fallback
-        session = get_session(user_id)
-        if not session:
-            user_id_alt = f"wa_{phone[2:]}" if phone.startswith("91") else f"wa_91{phone}"
-            session = get_session(user_id_alt)
-            if session:
-                user_id = user_id_alt
-
-        if not session:
-            return {"status": "user session not found", "phone": phone}
-
-        if status == "failed":
-            new_link_reply = handle_connect_link(user_id, session)
-            reply = (
-                "Lagta hai galat Gmail account use hua. Kripya us Gmail se try karein "
-                "jisme Google Business Profile registered hai:\n\n"
-                + new_link_reply
-            )
-        else:
-            if email:
-                session["connected_email"] = email
-                save_session(user_id, session)
-            reply = handle_check_latest_connection(user_id, session)
-
-        save_message(user_id, "assistant", reply)
-
-        # Send WhatsApp message immediately
-        from app.services.whatsapp_service import send_whatsapp
-        send_whatsapp(phone, reply)
-        print(f"[Webhook Connected] Sent reply to {phone}")
-
-        # Cancel follow-up and start feature follow-ups
-        from app.services.followup_service import on_connected
-        session = get_session(user_id)
-        if session.get("connect_verified"):
-            on_connected(user_id, phone)
-
-        return {"status": "ok", "user_id": user_id, "phone": phone}
-
-    except Exception as e:
-        print(f"[Webhook Connected] Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    if body.get("status") == "failed":
+        await run_in_threadpool(engine.handle, user_id, phone, "", "CONNECT_GO")
+    else:
+        # Seedha verify + auto health report (polling jaisa hi). Button
+        # simulation par depend nahi — current screen kuch bhi ho, kaam karega.
+        from app.flow.actions import verify_and_start
+        await run_in_threadpool(verify_and_start, user_id, phone)
+    return {"status": "ok"}
 
 
-# ── Admin APIs ────────────────────────────────────────────────────
-@app.post("/api/admin/rebuild-kb")
-async def admin_rebuild_kb():
-    """Rebuild Qdrant knowledge base — call when data changes"""
-    try:
-        from app.services.knowledge_base import rebuild_knowledge_base
-        ok = rebuild_knowledge_base()
-        return {"status": "ok" if ok else "error", "message": "KB rebuilt" if ok else "Rebuild failed"}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
+# ── Admin ─────────────────────────────────────────────────────────
+@app.get("/health")
+def health():
+    return {"status": "ok", "version": "6.0.0", "screens": len(loader.FLOW["screens"])}
+
+
+@app.get("/")
+def root():
+    return {"message": "Limbu.ai Chatbot API v6"}
 
 
 @app.get("/api/admin/users")
@@ -433,132 +264,8 @@ def admin_clear(user_id: str):
     return {"message": f"Cleared for {user_id}"}
 
 
-@app.get("/history/{user_id}")
-def get_history_endpoint(user_id: str):
-    return {"user_id": user_id, "history": get_history(user_id)}
-
-
-@app.delete("/history/{user_id}")
-def delete_history(user_id: str):
-    clear_history(user_id)
-    return {"message": f"Cleared for {user_id}"}
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "version": "5.0.0"}
-
-
-# ── Admin Dashboard ───────────────────────────────────────────────
-@app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard():
-    return """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Limbu.ai Chat Admin</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;height:100vh;display:flex;flex-direction:column}
-.header{background:linear-gradient(135deg,#16a34a,#059669);padding:14px 24px;display:flex;align-items:center;justify-content:space-between}
-.header h1{color:white;font-size:18px;font-weight:700}
-.live{display:flex;align-items:center;gap:6px;color:#bbf7d0;font-size:13px}
-.dot{width:8px;height:8px;background:#4ade80;border-radius:50%;animation:pulse 1.5s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.body{display:flex;flex:1;overflow:hidden}
-.sidebar{width:340px;background:#1e293b;border-right:1px solid #334155;display:flex;flex-direction:column}
-.sidebar-top{padding:12px 16px;border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between}
-.sidebar-top h2{font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:1px}
-.badge{background:#16a34a;color:white;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600}
-.users{flex:1;overflow-y:auto}
-.user{padding:12px 16px;border-bottom:1px solid #1a2535;cursor:pointer;transition:all .15s}
-.user:hover{background:#273344}
-.user.active{background:#1a2e22;border-left:3px solid #16a34a}
-.uid{font-size:12px;color:#94a3b8;margin-bottom:3px;word-break:break-all}
-.umeta{font-size:11px;color:#475569;margin-bottom:3px}
-.ulast{font-size:12px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ucnt{float:right;background:#0f3a1e;color:#4ade80;padding:1px 6px;border-radius:8px;font-size:11px}
-.chat{flex:1;display:flex;flex-direction:column}
-.chat-top{padding:12px 20px;background:#1e293b;border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between}
-.chat-top h3{font-size:14px;color:#e2e8f0;font-weight:600}
-.btns{display:flex;gap:8px}
-.btn{padding:5px 12px;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600}
-.btn-r{background:#1e3a2f;color:#4ade80}
-.btn-c{background:#3b1e1e;color:#f87171}
-.messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
-.msg{max-width:72%;padding:10px 14px;border-radius:16px;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
-.msg.user{background:#1d4ed8;color:white;align-self:flex-end;border-bottom-right-radius:4px}
-.msg.assistant{background:#1e293b;color:#e2e8f0;align-self:flex-start;border-bottom-left-radius:4px}
-.mtime{font-size:10px;opacity:.5;margin-top:4px}
-.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#475569;gap:10px}
-.no-users{padding:20px;text-align:center;color:#475569;font-size:13px}
-</style>
-</head>
-<body>
-<div class="header">
-  <h1>🤖 Limbu.ai Chat Admin v5</h1>
-  <div class="live"><div class="dot"></div>Live • Auto-refresh 10s</div>
-</div>
-<div class="body">
-  <div class="sidebar">
-    <div class="sidebar-top"><h2>Conversations</h2><span class="badge" id="cnt">0</span></div>
-    <div class="users" id="users"><div class="no-users">Loading...</div></div>
-  </div>
-  <div class="chat">
-    <div class="chat-top">
-      <div><h3 id="ctitle">Select a conversation</h3><span id="cmeta" style="font-size:12px;color:#64748b"></span></div>
-      <div class="btns">
-        <button class="btn btn-r" onclick="loadUsers()">↺ Refresh</button>
-        <button class="btn btn-c" id="cbtn" onclick="doClear()" style="display:none">🗑 Clear</button>
-      </div>
-    </div>
-    <div class="messages" id="msgs">
-      <div class="empty"><div style="font-size:40px">💬</div><p>Select a conversation to view</p></div>
-    </div>
-  </div>
-</div>
-<script>
-let sel=null;
-async function loadUsers(){
-  try{
-    const d=await(await fetch('/api/admin/users')).json();
-    document.getElementById('cnt').textContent=d.total;
-    const el=document.getElementById('users');
-    if(!d.users.length){el.innerHTML='<div class="no-users">No conversations yet</div>';return;}
-    el.innerHTML=d.users.map(u=>`<div class="user ${u.user_id===sel?'active':''}" onclick="selUser('${u.user_id}')">
-      <div class="uid">${u.user_id.slice(0,36)} <span class="ucnt">${u.message_count}</span></div>
-      <div class="umeta">${u.last_active}</div>
-      <div class="ulast">${u.last_message||''}</div>
-    </div>`).join('');
-  }catch(e){console.error(e)}
-}
-async function selUser(uid){
-  sel=uid;
-  document.getElementById('cbtn').style.display='inline-block';
-  document.getElementById('ctitle').textContent=uid.slice(0,44)+'...';
-  await loadChat(uid);loadUsers();
-}
-async function loadChat(uid){
-  try{
-    const d=await(await fetch('/api/admin/chat/'+encodeURIComponent(uid))).json();
-    document.getElementById('cmeta').textContent=d.total+' messages';
-    const el=document.getElementById('msgs');
-    if(!d.messages.length){el.innerHTML='<div class="empty"><div style="font-size:40px">💬</div><p>No messages</p></div>';return;}
-    el.innerHTML=d.messages.map(m=>`<div class="msg ${m.role}">${m.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}<div class="mtime">${m.time||''}</div></div>`).join('');
-    el.scrollTop=el.scrollHeight;
-  }catch(e){console.error(e)}
-}
-async function doClear(){
-  if(!sel||!confirm('Clear this conversation?'))return;
-  await fetch('/api/admin/chat/'+encodeURIComponent(sel),{method:'DELETE'});
-  document.getElementById('ctitle').textContent='Select a conversation';
-  document.getElementById('cmeta').textContent='';
-  document.getElementById('cbtn').style.display='none';
-  sel=null;loadUsers();
-}
-loadUsers();
-setInterval(()=>{loadUsers();if(sel)loadChat(sel);},10000);
-</script>
-</body>
-</html>"""
+@app.post("/api/admin/rebuild-kb")
+def admin_rebuild_kb():
+    from app.services.knowledge_base import rebuild_knowledge_base
+    ok = rebuild_knowledge_base()
+    return {"status": "ok" if ok else "error"}

@@ -1,180 +1,161 @@
-import httpx
+"""
+Dashboard actions — trigger karo, result deliver karo.
+
+Result do raaste se aata hai:
+  1. Limbu /webhook/action-complete call kare  (normal)
+  2. Poll thread (safety net, agar webhook na aaye)
+
+Dono mein se jo pehle aaye wahi deliver karta hai — dedup Redis mein hai.
+"""
+import logging
 import threading
 import time
+
+import httpx
+
 from app.core.config import CHATBOT_ACTION_API, CHATBOT_ACTION_RESULT_API
 
-_delivered: dict = {}
-_delivered_lock = threading.Lock()
+log = logging.getLogger(__name__)
+
+_POLL_ATTEMPTS = 36
+_POLL_EVERY = 5
+_DEDUP_TTL = 3600
 
 
-def _mark_delivered(user_id: str, action: str) -> bool:
-    key = f"{user_id}:{action}"
-    now = time.time()
-    with _delivered_lock:
-        last = _delivered.get(key, 0)
-        if now - last < 60:
-            print(f"[Dedup] Blocked: {key}")
-            return False
-        _delivered[key] = now
-        if len(_delivered) > 500:
-            old = [k for k, v in _delivered.items() if now - v > 300]
-            for k in old:
-                del _delivered[k]
+def _claim(user_id: str, action: str) -> bool:
+    """
+    Deliver karne ka haq maango. True sirf ek baar milega.
+
+    NOTE: purana code ek in-memory dict (60-second window) use karta tha. 1 se
+    zyada worker par woh kaam nahi karta — webhook ek worker mein aata aur poll
+    thread doosre mein chalti, dono deliver kar dete, user ko report DO baar
+    milti. Redis SET NX atomic hai, saare workers ke liye ek hi sach.
+    """
+    try:
+        from app.services.redis_service import r
+        return bool(r.set(f"delivered:{user_id}:{action}", "1", nx=True, ex=_DEDUP_TTL))
+    except Exception as e:
+        log.warning("Dedup fail (deliver kar rahe hain): %s", e)
         return True
 
 
+def _unclaim(user_id: str, action: str) -> None:
+    try:
+        from app.services.redis_service import r
+        r.delete(f"delivered:{user_id}:{action}")
+    except Exception:
+        pass
+
+
 def trigger_action(action: str, phone: str, location_id: str, email: str, user_id: str) -> dict:
+    _unclaim(user_id, action)  # naya request = naya deliver allowed
     try:
         with httpx.Client(timeout=30) as client:
-            payload = {"action": action, "phone": phone, "locationId": location_id, "email": email}
-            print(f"[Action] Triggering '{action}' phone={phone} locationId={location_id}")
-            res = client.post(CHATBOT_ACTION_API, json=payload)
-            data = res.json()
-            print(f"[Action] Response {res.status_code}: success={data.get('success')} msg={data.get('message','')[:80]}")
-            if data.get("success"):
-                key = f"{user_id}:{action}"
-                with _delivered_lock:
-                    _delivered.pop(key, None)
-                _start_poll(phone, action, user_id)
-            return data
+            res = client.post(CHATBOT_ACTION_API, json={
+                "action": action, "phone": phone,
+                "locationId": location_id, "email": email,
+            })
+        if res.status_code != 200:
+            log.error("Action '%s' HTTP %s", action, res.status_code)
+            return {"success": False, "message": f"HTTP {res.status_code}"}
+
+        data = res.json()
+        log.info("Action '%s' triggered: success=%s", action, data.get("success"))
+        if data.get("success"):
+            _start_poll(phone, action, user_id)
+        return data
     except Exception as e:
-        print(f"[Action] Error: {e}")
-        return {"success": False, "message": str(e)}
+        log.exception("Action '%s' trigger fail: %s", action, e)
+        # NOTE: exception text user tak nahi jaana chahiye — usme URL/keys ho sakte hain
+        return {"success": False, "message": "trigger failed"}
 
 
-def _start_poll(phone: str, action: str, user_id: str):
-    t = threading.Thread(target=_poll_loop, args=(phone, action, user_id), daemon=True)
-    t.start()
-    print(f"[Poll] Started action={action} user={user_id}")
+def _start_poll(phone: str, action: str, user_id: str) -> None:
+    threading.Thread(target=_poll_loop, args=(phone, action, user_id), daemon=True).start()
 
 
-def _poll_loop(phone: str, action: str, user_id: str):
-    for attempt in range(36):
-        time.sleep(5)
+def _poll_loop(phone: str, action: str, user_id: str) -> None:
+    for attempt in range(_POLL_ATTEMPTS):
+        time.sleep(_POLL_EVERY)
         try:
             with httpx.Client(timeout=15) as client:
-                res = client.get(CHATBOT_ACTION_RESULT_API, params={"phone": phone, "action": action})
-                print(f"[Poll] {action} attempt {attempt+1}: HTTP {res.status_code}")
-                if res.status_code != 200:
-                    continue
-                data = res.json()
-                if not data.get("success"):
-                    continue
-                result = data.get("result", {})
-                if not result:
-                    continue
-                if _mark_delivered(user_id, action):
-                    _deliver(user_id, phone, action, result)
-                return
+                res = client.get(CHATBOT_ACTION_RESULT_API,
+                                 params={"phone": phone, "action": action})
+            if res.status_code != 200:
+                continue
+            data = res.json()
+            if not data.get("success") or not data.get("result"):
+                continue
+            if _claim(user_id, action):
+                deliver(user_id, phone, action, data["result"])
+            return
         except Exception as e:
-            print(f"[Poll] Error attempt {attempt+1}: {e}")
-            time.sleep(3)
-    print(f"[Poll] Timeout: action={action} user={user_id}")
+            log.warning("Poll '%s' attempt %d fail: %s", action, attempt + 1, e)
+    log.error("Poll timeout: action=%s user=%s — user ko result nahi mila", action, user_id)
 
 
-def deliver_from_webhook(user_id: str, phone: str, action: str, result: dict, action_id: str = ""):
-    if _mark_delivered(user_id, action):
-        _deliver(user_id, phone, action, result)
+def deliver_from_webhook(user_id: str, phone: str, action: str,
+                         result: dict, action_id: str = "") -> None:
+    if _claim(user_id, action):
+        deliver(user_id, phone, action, result)
 
 
-def _deliver(user_id: str, phone: str, action: str, result: dict):
+# result ke URL kis key mein aate hain — provider consistent nahi hai
+_URL_KEYS = {
+    "health_score": [("pdf_url", "📄 Full Report (PDF)")],
+    "insights": [("pdfUrl", "📄 Full Report (PDF)"), ("pdf_url", "📄 Full Report (PDF)")],
+    "magic_qr": [("reviewUrl", "⭐ Google Review Link"), ("review_url", "⭐ Google Review Link"),
+                 ("url", "🔮 QR Card"), ("qr_url", "🔮 QR Card")],
+    "website": [("url", "🌐 Website URL"), ("website_url", "🌐 Website URL")],
+}
+
+
+def _build_message(action: str, result: dict) -> str:
+    parts = []
+    text = (result.get("text") or result.get("message") or "").strip()
+    if text and text.lower() != "null":
+        parts.append(text)
+
+    seen = set()
+    for key, label in _URL_KEYS.get(action, []):
+        url = (result.get(key) or "").strip()
+        if url and url not in seen:
+            seen.add(url)
+            parts.append(f"{label}:\n{url}")
+
+    return "\n\n".join(parts)
+
+
+def deliver(user_id: str, phone: str, action: str, result: dict) -> None:
+    """Result bhejo, phir user ko wapas flow ke buttons dikhao."""
+    from app.flow import engine
+    from app.services.redis_service import get_session, save_message
+    from app.services.whatsapp_service import send_text
+
     try:
-        from app.services.redis_service import save_message, get_session
-        from app.services.whatsapp_service import send_whatsapp, send_whatsapp_image, send_whatsapp_document
-        from app.nodes.features import FEATURE_NEXT_OFFER
+        msg = _build_message(action, result)
+        if not msg:
+            log.error("Action '%s' ka result khaali hai: %s", action, result)
+            return
 
-        sess = get_session(user_id)
-        lang = sess.get("lang", "hi") if sess else "hi"
+        # send pehle, save baad mein: purana code ulta karta tha, isliye Redis
+        # mein woh message likha jaata tha jo user tak pahuncha hi nahi.
+        if send_text(phone, msg):
+            save_message(user_id, "assistant", msg)
+        else:
+            log.error("Action '%s' ka result bhej nahi paye user=%s", action, user_id)
+            return
 
-        # Build text message
-        text_msg = _build_text_message(action, result, lang)
+        session = get_session(user_id)
+        ctx = engine.Ctx(user_id=user_id, phone=phone, session=session,
+                         lang=session.get("lang", "hi"))
 
-        # Next offer
-        next_offer_map = FEATURE_NEXT_OFFER.get(action, {})
-        next_offer = next_offer_map.get(lang, next_offer_map.get("hi", "")) if isinstance(next_offer_map, dict) else str(next_offer_map)
-
-        wa_phone = phone if phone.startswith("91") else "91" + phone
-
-        # ── Send based on action type ─────────────────────────────
-        # All actions: send single combined message (URL as text = WhatsApp shows preview)
-        final_msg = text_msg
-
-        if action == "health_score":
-            pdf_url = result.get("pdf_url", "")
-            if pdf_url and pdf_url not in final_msg:
-                final_msg += f"\n\n📄 *Full Report (PDF):*\n{pdf_url}"
-
-        elif action == "magic_qr":
-            qr_url = result.get("url", "") or result.get("qr_url", "")
-            review_url = result.get("reviewUrl", "") or result.get("review_url", "")
-            if review_url and review_url not in final_msg:
-                final_msg += f"\n\n⭐ *Google Review Link:*\n{review_url}"
-            if qr_url and qr_url not in final_msg:
-                final_msg += f"\n\n🔮 *QR Card (Download & Print):*\n{qr_url}"
-
-        elif action == "insights":
-            pdf_url = result.get("pdfUrl", "") or result.get("pdf_url", "")
-            if pdf_url and pdf_url not in final_msg:
-                final_msg += f"\n\n📄 *Full Report (PDF):*\n{pdf_url}"
-
-        elif action == "website":
-            url = result.get("url", "") or result.get("website_url", "")
-            if url and url not in final_msg:
-                final_msg += f"\n\n🌐 *Website URL:*\n{url}"
-
-        save_message(user_id, "assistant", final_msg)
-        send_whatsapp(wa_phone, final_msg)
-
-        # Send next offer
-        if next_offer:
-            time.sleep(1)
-            save_message(user_id, "assistant", next_offer)
-            send_whatsapp(wa_phone, next_offer)
-
-        print(f"[Poll] Delivered {action} to {user_id}")
-
-        # Schedule follow-up for next feature
-        from app.services.followup_service import on_feature_delivered
-        on_feature_delivered(user_id, wa_phone, action)
+        # Feature chain: is feature ke baad kaunsa screen (jaise health -> QR ka offer).
+        # Mapping na mile to REVIEW_DONE (chain ka end) par le jao.
+        from app.flow import loader
+        next_screen = (loader.features().get("chain") or {}).get(action) or "REVIEW_DONE"
+        engine._goto(ctx, next_screen)
+        log.info("Delivered '%s' to %s -> %s", action, user_id, next_screen)
 
     except Exception as e:
-        print(f"[Poll] Deliver error: {e}")
-        import traceback; traceback.print_exc()
-
-
-def _build_text_message(action: str, result: dict, lang: str = "hi") -> str:
-    api_text = result.get("text", "").strip()
-
-    if action == "health_score":
-        if api_text:
-            # Clean null services from API text
-            import re
-            api_text = re.sub(r'🛠️ \*Services:\* null.*?(?=\n\n|\Z)', '', api_text, flags=re.DOTALL)
-            api_text = re.sub(r'\*Services:\* (?:null(?:,\s*)?)+.*?\n', '', api_text)
-            return api_text.strip()
-        score = result.get("score", "N/A")
-        return f"✅ *GMB Health Report ready!*\n\nScore: *{score}/100*"
-
-    elif action == "magic_qr":
-        review_url = result.get("reviewUrl", "") or result.get("review_url", "")
-        if api_text and review_url:
-            return f"✅ *Magic QR ready hai!*\n\n⭐ Review Link:\n{review_url}"
-        return api_text or "✅ *Magic QR ready hai!*"
-
-    elif action == "insights":
-        if api_text:
-            return api_text
-        return "✅ *Google Insights ready hai!*"
-
-    elif action == "website":
-        url = result.get("url", "") or result.get("website_url", "")
-        msg = api_text or "✅ *Aapki Free Website ready hai!*"
-        if url and url not in msg:
-            msg += f"\n\n🌐 *Website URL:*\n{url}"
-        return msg
-
-    elif action == "review_reply":
-        return api_text or "✅ *Review Reply ready hai!*"
-
-    else:
-        return api_text or f"✅ *{action.replace('_',' ').title()} ready hai!*"
+        log.exception("Deliver '%s' fail: %s", action, e)

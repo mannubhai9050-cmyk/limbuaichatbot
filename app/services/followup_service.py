@@ -1,244 +1,150 @@
 """
-Follow-up message service — sends automatic reminders based on conversation state.
-Runs as background threads, respects user language.
+Follow-up nudges — Redis-backed.
+
+PURANA SYSTEM aur uski teen kharabiyan:
+  • threading.Timer + daemon=True  -> har deploy/restart par saare pending
+    follow-up chup-chaap mar jaate the. Redis mein koi nishan nahi tha ki
+    koi follow-up due bhi tha, isliye recover karna namumkin tha.
+  • _active_timers ek per-process dict tha -> 1 se zyada worker par, user ke
+    reply karne par doosre worker ka timer cancel nahi hota tha. Nateeja:
+    "aapne jawab nahi diya" wala nudge reply ke turant baad chala jaata tha.
+  • timer thread session ka minutes purana snapshot wapas likh deta tha,
+    jisse user ka connect_verified / features_offered roll back ho jaata tha.
+
+NAYA SYSTEM:
+  • Due follow-ups ek Redis sorted set mein (score = due timestamp).
+  • Sweeper har 30s due wale uthata hai. Uthana ZREM se atomic hai, isliye
+    ek nudge sirf EK worker bhejta hai — chahe 10 worker chal rahe hon.
+  • Restart ke baad bhi sab queue mein pade rehte hain — kuch nahi khota.
+  • Session bhejne ke waqt fresh padha jaata hai, purana snapshot nahi.
 """
+import json
+import logging
 import threading
 import time
-from app.services.redis_service import get_session, save_session, save_message
-from app.services.whatsapp_service import send_whatsapp
 
-# Track active follow-up timers per user — prevent duplicates
-_active_timers: dict = {}
-_timers_lock = threading.Lock()
+log = logging.getLogger(__name__)
 
+QUEUE = "followups"
+SWEEP_EVERY = 30
+MAX_FOLLOWUPS = 2
 
-def _cancel_followup(user_id: str):
-    """Cancel any pending follow-up for this user"""
-    with _timers_lock:
-        t = _active_timers.pop(user_id, None)
-        if t:
-            t.cancel()
-
-
-def _schedule_followup(user_id: str, phone: str, delay_seconds: int, followup_type: str):
-    """Schedule a follow-up message after delay"""
-    _cancel_followup(user_id)
-    t = threading.Timer(
-        delay_seconds,
-        _send_followup,
-        args=(user_id, phone, followup_type)
-    )
-    t.daemon = True
-    t.start()
-    with _timers_lock:
-        _active_timers[user_id] = t
-    print(f"[Followup] Scheduled {followup_type} for {user_id} in {delay_seconds}s")
+# kind -> (kitni der baad, kaunsi screen bhejni hai)
+# Screen names flows/main.json ke saath match hone chahiye — warna nudge
+# fire hone par _goto crash karega.
+RULES = {
+    "CONNECT_PENDING": (10 * 60, "CONNECT_NOT_YET"),
+    "PLAN_PENDING": (60 * 60, "PLANS"),
+}
 
 
-def _get_phone(user_id: str, session: dict) -> str:
-    phone = session.get("connect_phone", "")
-    if not phone and user_id.startswith("wa_"):
-        phone = user_id.replace("wa_", "")
-        if not phone.startswith("91") and len(phone) == 10:
-            phone = "91" + phone
-    return phone
+def _r():
+    from app.services.redis_service import r
+    return r
 
 
-def _build_message(followup_type: str, session: dict) -> str:
-    lang = session.get("lang", "hi")
-    en = (lang == "en")
-    biz_name = (
-        session.get("active_business_name") or
-        session.get("business_name") or
-        "aapka business"
-    )
-
-    if followup_type == "CONNECT_PENDING":
-        phone = session.get("connect_phone", "")
-        connect_url = f"https://limbu.ai/connect-google-business?phone={phone}" if phone else "https://limbu.ai/connect-google-business"
-        if en:
-            return (
-                f"Hi! 😊 I noticed you haven't connected your Google Business Profile yet.\n\n"
-                f"Having trouble? Here's the link again:\n"
-                f"🔗 {connect_url}\n\n"
-                f"Just login with Gmail and click Allow. Takes less than 1 minute!\n"
-                f"Need help? Call 📞 +91 9289344726"
-            )
-        return (
-            f"Namaste! 😊 Lagta hai aapne abhi tak Google Business Profile connect nahi kiya.\n\n"
-            f"Koi problem aa rahi hai? Yeh raha link dobara:\n"
-            f"🔗 {connect_url}\n\n"
-            f"Bas Gmail se login karein aur Allow click karein. 1 minute se kam lagta hai!\n"
-            f"Help chahiye? Call karein 📞 +91 9289344726"
-        )
-
-    elif followup_type == "FEATURE_PENDING":
-        offered = session.get("features_offered", [])
-        all_features = ["health_score", "magic_qr", "insights", "website", "review_reply"]
-        remaining = [f for f in all_features if f not in offered]
-        feature_names = {
-            "health_score": "Full Health Report",
-            "magic_qr": "Magic QR Code",
-            "insights": "Google Insights",
-            "website": "Free Website",
-            "review_reply": "AI Review Reply"
-        }
-        next_feat = feature_names.get(remaining[0], "FREE feature") if remaining else "FREE features"
-        if en:
-            return (
-                f"Hi! 😊 Don't miss your FREE tools for *{biz_name}*!\n\n"
-                f"✅ Next up: *{next_feat}*\n\n"
-                f"Just reply *Yes* and I'll get it ready for you! 🚀"
-            )
-        return (
-            f"Namaste! 😊 *{biz_name}* ke liye FREE tools baaki hain!\n\n"
-            f"✅ Agla: *{next_feat}*\n\n"
-            f"Bas *Haan* likho — main abhi ready kar doongi! 🚀"
-        )
-
-    elif followup_type == "SOCIAL_MEDIA":
-        connected = []
-        for p in ["facebook", "instagram", "youtube", "linkedin"]:
-            if session.get(f"{p}_verified"):
-                connected.append(p.title())
-        not_connected = [p.title() for p in ["Facebook", "Instagram", "YouTube", "LinkedIn"] if p.lower() not in [c.lower() for c in connected]]
-        next_platform = not_connected[0] if not_connected else None
-        if not next_platform:
-            return ""
-        if en:
-            return (
-                f"Hi! 😊 *{biz_name}* is doing well on Google!\n\n"
-                f"Now let's grow your *{next_platform}* presence too. 📱\n\n"
-                f"Connect your {next_platform} page to get:\n"
-                f"• Automatic post scheduling\n"
-                f"• Customer engagement tools\n"
-                f"• Performance insights\n\n"
-                f"Reply *{next_platform}* to get the connect link! 🚀"
-            )
-        return (
-            f"Namaste! 😊 *{biz_name}* Google par acha chal raha hai!\n\n"
-            f"Ab *{next_platform}* par bhi grow karein. 📱\n\n"
-            f"*{next_platform}* connect karne se milega:\n"
-            f"• Automatic post scheduling\n"
-            f"• Customer engagement\n"
-            f"• Performance insights\n\n"
-            f"*{next_platform}* likhein — connect link doongi! 🚀"
-        )
-
-    elif followup_type == "PLAN_UPSELL":
-        if en:
-            return (
-                f"Hi! 😊 You've tried all FREE features for *{biz_name}*!\n\n"
-                f"📊 Your competitors are actively working on their profiles.\n"
-                f"Don't fall behind — get a plan to automate everything:\n\n"
-                f"• 🥉 Basic ₹2,500/month — GMB posts, Magic QR, citations\n"
-                f"• 🥈 Professional ₹5,500/month — + Review management, insights\n"
-                f"• 🥇 Premium ₹7,500/month — Full automation\n\n"
-                f"Reply *Plan* to know more or call 📞 +91 9289344726"
-            )
-        return (
-            f"Namaste! 😊 *{biz_name}* ke liye saari FREE features try ho gayi!\n\n"
-            f"📊 Aapke competitors apni profiles par kaam kar rahe hain.\n"
-            f"Peeche mat rahein — plan lo sab automate karne ke liye:\n\n"
-            f"• 🥉 Basic ₹2,500/month — GMB posts, Magic QR, citations\n"
-            f"• 🥈 Professional ₹5,500/month — + Review management, insights\n"
-            f"• 🥇 Premium ₹7,500/month — Full automation\n\n"
-            f"*Plan* likhein ya call karein 📞 +91 9289344726"
-        )
-
-    return ""
-
-
-def _send_followup(user_id: str, phone: str, followup_type: str):
-    """Actually send the follow-up — max 2 total per user"""
+def schedule(user_id: str, phone: str, kind: str) -> None:
+    rule = RULES.get(kind)
+    if not rule:
+        log.error("Anjaan followup kind: %s", kind)
+        return
+    delay, _ = rule
     try:
-        session = get_session(user_id)
-        if not session:
-            return
-
-        # Max 2 follow-ups per user
-        followup_count = session.get("followup_count", 0)
-        if followup_count >= 2:
-            print(f"[Followup] Max 2 reached for {user_id}, stopping")
-            return
-
-        # Check if follow-up is still relevant
-        if followup_type == "CONNECT_PENDING":
-            if session.get("connect_verified"):
-                print(f"[Followup] {user_id} already connected, skip")
-                return
-
-        elif followup_type == "FEATURE_PENDING":
-            if not session.get("connect_verified"):
-                return
-            all_features = ["health_score", "magic_qr", "insights", "website", "review_reply"]
-            offered = session.get("features_offered", [])
-            if all(f in offered for f in all_features):
-                followup_type = "SOCIAL_MEDIA"
-
-        elif followup_type == "SOCIAL_MEDIA":
-            all_social = ["facebook", "instagram", "youtube", "linkedin"]
-            if all(session.get(f"{p}_verified") for p in all_social):
-                followup_type = "PLAN_UPSELL"
-
-        msg = _build_message(followup_type, session)
-        if not msg:
-            print(f"[Followup] No message for {followup_type}, skip")
-            return
-
-        # Increment count and save
-        session["followup_count"] = followup_count + 1
-        save_session(user_id, session)
-
-        save_message(user_id, "assistant", msg)
-        send_whatsapp(phone, msg)
-        print(f"[Followup] Sent {followup_type} to {user_id} (count={followup_count + 1}/2)")
-
+        payload = json.dumps({"user_id": user_id, "phone": phone, "kind": kind},
+                             sort_keys=True)
+        _r().zadd(QUEUE, {payload: time.time() + delay})
+        log.info("Followup scheduled: %s %s (%ds baad)", user_id, kind, delay)
     except Exception as e:
-        print(f"[Followup] Error: {e}")
-        import traceback; traceback.print_exc()
+        log.exception("Followup schedule fail: %s", e)
 
 
-# ── Public API ────────────────────────────────────────────────────
+def cancel(user_id: str) -> None:
+    """
+    User bol pada — uske saare pending nudges hatao.
 
-def on_connect_link_sent(user_id: str, phone: str):
-    """Call when connect link is sent — follow-up in 10 min"""
-    _schedule_followup(user_id, phone, 600, "CONNECT_PENDING")
+    Purane code se ulta, yeh SAARE workers ke liye kaam karta hai, kyunki
+    queue Redis mein hai, kisi process ki memory mein nahi.
+    """
+    try:
+        r = _r()
+        for raw in r.zrange(QUEUE, 0, -1):
+            try:
+                if json.loads(raw).get("user_id") == user_id:
+                    r.zrem(QUEUE, raw)
+            except Exception:
+                continue
+    except Exception as e:
+        log.warning("Followup cancel fail: %s", e)
 
 
-def on_connected(user_id: str, phone: str):
-    """Call when user connects — cancel connect follow-up, first feature follow-up in 1 hour"""
-    _cancel_followup(user_id)
-    # Reset followup count on new connection
+def _send(item: dict) -> None:
+    from app.flow import engine
     from app.services.redis_service import get_session, save_session
-    session = get_session(user_id)
-    if session:
-        session["followup_count"] = 0
-        save_session(user_id, session)
-    _schedule_followup(user_id, phone, 3600, "FEATURE_PENDING")   # 1 hour
 
+    user_id, phone, kind = item["user_id"], item["phone"], item["kind"]
 
-def on_feature_delivered(user_id: str, phone: str, feature: str):
-    """After feature delivery — schedule follow-up only if followups remaining < 2"""
-    session = get_session(user_id)
-    if not session:
+    # Purani/stale queue entry (flow badalne ke baad) — chup-chaap chhod do.
+    if kind not in RULES:
+        log.info("Followup skip (unknown kind '%s')", kind)
         return
 
-    followup_count = session.get("followup_count", 0)
-    if followup_count >= 2:
-        print(f"[Followup] Max 2 reached for {user_id}, no more")
+    # Session ab padha ja raha hai — schedule ke waqt ka purana snapshot nahi.
+    session = get_session(user_id)
+
+    if session.get("followup_count", 0) >= MAX_FOLLOWUPS:
+        log.info("Followup skip (limit): %s", user_id)
         return
 
-    all_features = ["health_score", "magic_qr", "insights", "website", "review_reply"]
-    offered = session.get("features_offered", [])
-    remaining = [f for f in all_features if f not in offered]
+    # Jo kaam ho chuka, uska nudge mat bhejo
+    if kind == "CONNECT_PENDING" and session.get("connect_verified"):
+        return
+    if kind == "FEATURE_PENDING" and session.get("features_offered"):
+        return
 
-    if remaining:
-        _schedule_followup(user_id, phone, 600, "FEATURE_PENDING")   # 10 min
-    else:
-        _schedule_followup(user_id, phone, 3600, "SOCIAL_MEDIA")      # 1 hour
+    session["followup_count"] = session.get("followup_count", 0) + 1
+    save_session(user_id, session)
+
+    _, screen = RULES[kind]
+    ctx = engine.Ctx(user_id=user_id, phone=phone, session=session,
+                     lang=session.get("lang", "hi"))
+    engine._goto(ctx, screen)
+    log.info("Followup sent: %s %s -> %s", user_id, kind, screen)
 
 
-def on_user_message(user_id: str):
-    """Call when user sends any message — cancel pending follow-up (they're active)"""
-    _cancel_followup(user_id)
+def sweep_once() -> int:
+    """Due follow-ups bhejo. Bheje gaye count return karta hai."""
+    r = _r()
+    sent = 0
+    for raw in r.zrangebyscore(QUEUE, 0, time.time()):
+        # ZREM atomic hai: 1 sirf usi worker ko milega jisne pehle uthaya.
+        # Yahi duplicate nudges rokta hai.
+        if not r.zrem(QUEUE, raw):
+            continue
+        try:
+            _send(json.loads(raw))
+            sent += 1
+        except Exception as e:
+            log.exception("Followup send fail: %s", e)
+    return sent
+
+
+def _sweeper() -> None:
+    while True:
+        time.sleep(SWEEP_EVERY)
+        try:
+            sweep_once()
+        except Exception as e:
+            log.warning("Followup sweep fail: %s", e)
+
+
+_started = False
+
+
+def start_sweeper() -> None:
+    """App startup par ek baar. Thread mar bhi jaaye to queue Redis mein safe hai."""
+    global _started
+    if _started:
+        return
+    _started = True
+    threading.Thread(target=_sweeper, daemon=True, name="followup-sweeper").start()
+    log.info("Followup sweeper started (har %ds)", SWEEP_EVERY)
