@@ -269,6 +269,19 @@ def _handle_text(ctx: Ctx) -> None:
                 _goto(ctx, on_err or "SUPPORT", res.params)
             return
 
+    # Maps link kisi bhi screen par bheja -> business search (AI ko mat bhejo,
+    # warna "main link access nahi kar sakti" bolta hai). User ko bas business
+    # dhoondhna hota hai.
+    if actions._MAPS_URL.search(ctx.text):
+        res = actions.run("SEARCH_BUSINESS", ctx)
+        if res.next_override:
+            _goto(ctx, res.next_override, res.params)
+        elif res.ok:
+            _goto(ctx, "CONFIRM_BUSINESS", res.params)
+        else:
+            _goto(ctx, "BUSINESS_NOT_FOUND", res.params)
+        return
+
     # Warna AI jawab de, phir wahi buttons wapas
     from app.ai.fallback import answer
 

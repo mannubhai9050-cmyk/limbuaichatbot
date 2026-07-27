@@ -77,8 +77,14 @@ _MAPS_URL = re.compile(
 )
 
 
-def _query_from_maps_url(url: str) -> str:
-    """Maps link se business ka naam nikaalo (short link resolve karke)."""
+def _resolve_maps_url(url: str) -> tuple:
+    """
+    Maps link se (naam, lat, lng). Short link resolve karke.
+
+    ZAROORI: coordinates isliye chahiye kyunki sirf naam ('Mr. Dumpling') se
+    Places duniya bhar mein pehla galat result de deta hai. @lat,lng se search
+    sahi location par bias hoti hai.
+    """
     import urllib.parse
 
     resolved = url
@@ -88,16 +94,48 @@ def _query_from_maps_url(url: str) -> str:
     except Exception as e:
         log.warning("Maps link resolve fail: %s", e)
 
+    # Coordinates: @lat,lng  ya  !3dlat!4dlng  ya  ll=lat,lng
+    lat = lng = None
+    for pat in (r"@(-?\d+\.\d+),(-?\d+\.\d+)",
+                r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)",
+                r"[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)"):
+        m = re.search(pat, resolved)
+        if m:
+            lat, lng = float(m.group(1)), float(m.group(2))
+            break
+
+    # EXACT place_id (ChIJ...) — agar link mein ho to bilkul wahi business.
+    place_id = ""
+    m = re.search(r"place_id:(ChIJ[\w-]+)", resolved) or re.search(r"\b(ChIJ[\w-]{10,})", resolved)
+    if m:
+        place_id = m.group(1)
+
+    # Naam / query
+    query = ""
     m = re.search(r"[?&]q=([^&]+)", resolved)
     if m:
-        return urllib.parse.unquote_plus(m.group(1))
-    m = re.search(r"/place/([^/@?]+)", resolved)
-    if m:
-        return urllib.parse.unquote_plus(m.group(1)).replace("+", " ")
-    return ""
+        query = urllib.parse.unquote_plus(m.group(1))
+    else:
+        m = re.search(r"/place/([^/@?]+)", resolved)
+        if m:
+            query = urllib.parse.unquote_plus(m.group(1)).replace("+", " ")
+
+    # 'place_id:ChIJ...' ya coordinates-as-query hata do (naam nahi hai)
+    if query.lower().startswith("place_id:") or re.fullmatch(r"-?\d+\.\d+,-?\d+\.\d+", query):
+        query = ""
+
+    return query, lat, lng, place_id
 
 
-def _run_search(ctx: Ctx, query: str) -> Result:
+def _distance2(a: dict, lat: float, lng: float) -> float:
+    """Pin se squared distance (sorting ke liye kaafi)."""
+    loc = a.get("location") or {}
+    dlat = (loc.get("latitude", 0) or 0) - lat
+    dlng = (loc.get("longitude", 0) or 0) - lng
+    return dlat * dlat + dlng * dlng
+
+
+def _run_search(ctx: Ctx, query: str, lat: float = None, lng: float = None) -> Result:
     """Google Places par query search karo aur pehla result CONFIRM_BUSINESS ko do."""
     from app.services.google_places import search_places
 
@@ -105,13 +143,18 @@ def _run_search(ctx: Ctx, query: str) -> Result:
         return Result(ok=False)
 
     try:
-        places = search_places(query, "", page_size=5)
+        places = search_places(query, "", page_size=5, lat=lat, lng=lng)
     except Exception as e:
         log.exception("Places search fail: %s", e)
         return Result(ok=False)
 
     if not places:
         return Result(ok=False)
+
+    # Pin coordinates ho to sabse PAAS wala pehle — exact business jis par link
+    # point karta hai, wahi top par aata hai.
+    if lat is not None and lng is not None:
+        places.sort(key=lambda p: _distance2(p, lat, lng))
 
     ctx.session["search_places"] = places
     ctx.session["result_index"] = 0
@@ -137,11 +180,29 @@ def search_business(ctx: Ctx) -> Result:
 
     maps_link = _MAPS_URL.search(query)
     if maps_link:
-        q = _query_from_maps_url(maps_link.group(0).rstrip(".,!?)"))
-        if not q:
-            return Result(ok=False)
-        log.info("Maps link -> query: %s", q)
-        return _run_search(ctx, q)
+        q, lat, lng, place_id = _resolve_maps_url(maps_link.group(0).rstrip(".,!?)"))
+        log.info("Maps link -> query=%r coords=(%s,%s) place_id=%s", q, lat, lng, place_id)
+
+        # 1. place_id mila -> BILKUL EXACT business (search hi nahi).
+        if place_id:
+            from app.services.google_places import get_place_details
+            try:
+                place = get_place_details(place_id)
+            except Exception as e:
+                log.warning("place_id details fail: %s", e)
+                place = {}
+            if place and place.get("id"):
+                ctx.session["search_places"] = [place]
+                ctx.session["result_index"] = 0
+                ctx.session["found_place"] = place
+                ctx.session.pop("pending_biz_name", None)
+                save_session(ctx.user_id, ctx.session)
+                return Result(params=_place_params(place))
+
+        # 2. Naam + coords -> us location par search, pin ke paas wala pehle.
+        if q:
+            return _run_search(ctx, q, lat, lng)
+        return Result(ok=False)
 
     res = _run_search(ctx, query)
     if res.ok:

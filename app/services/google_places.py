@@ -21,13 +21,22 @@ FIELD_MASK_DETAILS = (
 )
 
 
-def search_places(name: str, city: str, page_size: int = 5) -> list:
+def search_places(name: str, city: str, page_size: int = 5,
+                  lat: float = None, lng: float = None) -> list:
     """
     Search business on Google Places API v1.
-    Uses precise text query: 'business_name city_address'
+
+    lat/lng diye ho (jaise Maps link se) to search UN coordinates par bias hoti
+    hai — warna 'Mr. Dumpling' jaisa naam duniya bhar mein pehla galat result
+    (USA) de deta hai. Bias se sahi location (jaise Kanpur) wala aata hai.
     """
-    # Build precise query — use full address if provided
     query = f"{name} {city}".strip() if city else name
+    body = {"textQuery": query, "pageSize": page_size}
+    if lat is not None and lng is not None:
+        body["locationBias"] = {
+            "circle": {"center": {"latitude": lat, "longitude": lng},
+                       "radius": 3000.0}
+        }
     try:
         with httpx.Client(timeout=15) as client:
             res = client.post(
@@ -37,11 +46,12 @@ def search_places(name: str, city: str, page_size: int = 5) -> list:
                     "X-Goog-Api-Key": GOOGLE_API_KEY,
                     "X-Goog-FieldMask": FIELD_MASK_SEARCH
                 },
-                json={"textQuery": query, "pageSize": page_size}
+                json=body
             )
             data = res.json()
             places = data.get("places", [])
-            print(f"[Places] Search '{query}' → {len(places)} results")
+            bias = f" @({lat},{lng})" if lat is not None else ""
+            print(f"[Places] Search '{query}'{bias} → {len(places)} results")
             return places
     except Exception as e:
         print(f"[GooglePlaces] Search error: {e}")
