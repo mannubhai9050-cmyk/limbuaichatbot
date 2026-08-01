@@ -18,11 +18,16 @@ def get_plans() -> dict:
                 data.get("data", {}).get("billingCycles")
                 or data.get("billingCycles", [])
             )
-            _plans_cache = _build_plans_map(billing)
-            return _plans_cache
+            built = _build_plans_map(billing)
+            if built:  # API se valid plans mile tabhi cache karo
+                _plans_cache = built
+                return _plans_cache
+            raise ValueError("empty plans from API")
     except Exception as e:
-        print(f"[Plans] API error: {e}")
-        return _get_default_plans()
+        print(f"[Plans] API error ({e}) — default plans use kar rahe hain")
+        # Default ko bhi cache karo — API 404 de rahi hai, har baar mat call karo
+        _plans_cache = _get_default_plans()
+        return _plans_cache
 
 
 def _build_plans_map(billing_cycles: list) -> dict:
@@ -85,29 +90,48 @@ def format_plan_message(plan: dict, user_id: str = "") -> str:
 
 
 def _get_default_plans() -> dict:
-    """Fallback if API unavailable"""
+    """
+    Current sahi plans (limbu.ai website ke hisaab se). Plans API abhi 404 deti
+    hai isliye yahi source of truth hai — API theek hone par woh override karegi.
+    """
     return {
         "monthly": {
             "basic plan": {
-                "title": "Basic Plan", "basePrice": 2500, "gst": 450,
-                "totalAmount": 2950, "posts": 15, "citations": 5,
+                "title": "Basic Plan", "basePrice": 3500, "gst": 630,
+                "totalAmount": 4130, "posts": 15, "citations": 5,
                 "paymentLink": "https://www.limbu.ai/checkout?planKey=subscription-basic",
                 "cycle": "monthly", "label": "Monthly", "save": 0, "discount": 0,
-                "features": ["Review Reply System", "Magic QR Code", "Insights Dashboard"]
+                "features": [
+                    "Review Reply System", "Magic QR Code Generation",
+                    "Insights Dashboard", "Category Addition & Optimization",
+                    "Website Builder",
+                ],
             },
             "professional plan": {
                 "title": "Professional Plan", "basePrice": 5500, "gst": 990,
                 "totalAmount": 6490, "posts": 30, "citations": 12,
                 "paymentLink": "https://www.limbu.ai/checkout?planKey=subscription-professional",
                 "cycle": "monthly", "label": "Monthly", "save": 0, "discount": 0,
-                "features": ["Review Reply Management", "Magic QR Code", "Insights Dashboard"]
+                "features": [
+                    "Review Reply Management", "Custom QR Code Generation",
+                    "Business Insights Dashboard", "Category Setup & Optimization",
+                    "Business Website Builder", "WhatsApp API Integration",
+                    "Multi-Agent Support (Up to 5 Agents)",
+                    "Data Scraper (1,000 Leads/Month)", "4 AI-Generated Reels/Month",
+                ],
             },
             "premium plan": {
                 "title": "Premium Plan", "basePrice": 7500, "gst": 1350,
-                "totalAmount": 8850, "posts": 45, "citations": 15,
+                "totalAmount": 8850, "posts": 45, "citations": 20,
                 "paymentLink": "https://www.limbu.ai/checkout?planKey=subscription-premium",
                 "cycle": "monthly", "label": "Monthly", "save": 0, "discount": 0,
-                "features": ["Review Reply Management", "Magic QR Code", "Insights Dashboard", "Advanced Automation"]
-            }
+                "features": [
+                    "Review Reply Management", "Custom QR Code Generation",
+                    "Business Insights Dashboard", "Category Addition & Optimization",
+                    "Website Builder", "Professional Services Integration",
+                    "10 Agent Access", "WhatsApp Workflow Automation",
+                    "10 AI-Generated Reels/Month",
+                ],
+            },
         }
     }

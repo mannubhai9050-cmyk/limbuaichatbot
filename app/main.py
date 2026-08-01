@@ -27,11 +27,7 @@ async def lifespan(_app: FastAPI):
     # Flow import ke waqt hi validate ho chuka hai — yahan sirf report.
     log.info("Flow loaded: %d screens, start=%s",
              len(loader.FLOW["screens"]), loader.start_screen())
-    try:
-        from app.services.knowledge_base import setup_knowledge_base
-        log.info("Knowledge base: %s", "ready" if setup_knowledge_base() else "unavailable")
-    except Exception as e:
-        log.warning("Knowledge base skipped: %s", e)
+    # RAG/Qdrant hata diya — Priya ka gyaan seedha prompt mein (flows/knowledge.md).
 
     from app.services.followup_service import start_sweeper
     start_sweeper()
@@ -262,10 +258,3 @@ def admin_chat(user_id: str):
 def admin_clear(user_id: str):
     clear_history(user_id)
     return {"message": f"Cleared for {user_id}"}
-
-
-@app.post("/api/admin/rebuild-kb")
-def admin_rebuild_kb():
-    from app.services.knowledge_base import rebuild_knowledge_base
-    ok = rebuild_knowledge_base()
-    return {"status": "ok" if ok else "error"}

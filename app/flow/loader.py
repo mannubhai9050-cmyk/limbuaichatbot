@@ -176,6 +176,96 @@ def text(key: str) -> dict:
     return t
 
 
+import re as _re
+
+# Typed text ko button se match karne ke liye — yes/no/haan/nahi + aam synonyms
+_AFFIRM = {
+    "yes", "yeah", "yea", "yep", "yup", "ya", "sure", "ok", "okay", "k", "yess",
+    "haan", "han", "ha", "hn", "haa", "ji", "jee", "jaruri", "zaroor", "theek",
+    "thik", "sahi", "chalega", "done", "ready", "start", "karo", "karenge",
+    "chahiye", "interested", "intrested", "yesss", "haanji",
+}
+_NEGATIVE = {
+    "no", "nope", "nah", "naa", "na", "nahi", "nhi", "nahin", "cancel",
+    "later", "baad", "skip", "mat", "nope.",
+}
+
+
+def _norm(s: str) -> str:
+    """Emoji/punctuation hata, lowercase, spaces collapse."""
+    s = _re.sub(r"[^\w\s]", " ", str(s), flags=_re.UNICODE)
+    return _re.sub(r"\s+", " ", s).strip().lower()
+
+
+def match_typed_button(screen_name: str, text: str) -> str:
+    """
+    User ne button ka jawab TYPE kiya (click nahi) — usse button id nikaalo.
+
+    'Yes'/'haan'/'yeah' -> affirmative button, 'No'/'nahi' -> negative button,
+    ya seedha button ke title se match ('plans', 'connect', etc.).
+
+    Yeh hybrid ka dil hai: click ya type, dono ek jaisa kaam karein.
+    """
+    t = _norm(text)
+    if not t:
+        return ""
+
+    s = FLOW["screens"].get(screen_name) or {}
+    btns = list(s.get("buttons", []))
+    for sec in s.get("sections", []):
+        btns.extend(sec.get("rows", []))
+    if not btns:
+        return ""
+
+    norm_titles = []  # (button, set-of-normalized-titles)
+    for b in btns:
+        titles = {_norm(b["title"].get(l, "")) for l in LANGS}
+        titles.discard("")
+        norm_titles.append((b, titles))
+
+    # 1. Seedha title match (exact ya andar)
+    for b, titles in norm_titles:
+        if t in titles:
+            return b["id"]
+    for b, titles in norm_titles:
+        for tt in titles:
+            if tt and (t == tt or (len(t) >= 3 and (t in tt or tt in t))):
+                return b["id"]
+
+    # 2. Yes/No synonyms -> affirmative/negative button.
+    # SIRF chhote jawab par (<= 3 shabd). "Nahi yrr kuch bhi de diya tune" jaisi
+    # lambi frustration ko "nahi"=No mat samjho — woh AI ke paas jaani chahiye.
+    tokens = t.split()
+    if len(tokens) > 3:
+        return ""
+    words = set(tokens)
+    is_yes = bool(words & _AFFIRM) or t in _AFFIRM
+    is_no = bool(words & _NEGATIVE) or t in _NEGATIVE
+
+    # Typo-tolerant: "yeaah", "yesss", "haaan", "okk" jaise variants bhi pakdo
+    if not is_yes and not is_no:
+        if _re.match(r"^(y+e+a*h*|ya+|ha+n?|o+k+|s+u+r+e+|ji+)$", t.replace(" ", "")):
+            is_yes = True
+        elif _re.match(r"^(n+o+|n+a+h*i*n*|na+)$", t.replace(" ", "")):
+            is_no = True
+    if is_yes and not is_no:
+        for b, titles in norm_titles:
+            if any(w in tt for tt in titles for w in ("yes", "haan", "ha")):
+                return b["id"]
+    if is_no and not is_yes:
+        # Pehle asli "No"/"Later" button dhoondo
+        for b, titles in norm_titles:
+            if any(w in tt for tt in titles for w in ("no", "nahi", "later", "baad")):
+                return b["id"]
+        # Warna "nahi/ye nahi" ka matlab "yeh nahi, doosra dikhao" — jaise
+        # CONFIRM_BUSINESS par "Show another"/"Doosra dikhao"
+        for b, titles in norm_titles:
+            if any(w in tt for tt in titles for w in ("doosra", "dusra", "another", "next", "agla")):
+                return b["id"]
+
+    return ""
+
+
 def button_by_title(screen_name: str, title: str) -> str:
     """
     Title se button id nikaalo — ek screen ke andar.

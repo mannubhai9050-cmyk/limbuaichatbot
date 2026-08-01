@@ -41,6 +41,7 @@ class Result:
     params: dict = field(default_factory=dict)  # screen body ke {{...}} ke liye
     next_override: str = ""                     # flow ka 'next' badalna ho to
     stop: bool = False                          # yahin ruko — result baad mein async aayega
+    to_ai: bool = False                         # samajh nahi aaya -> AI intent samjhe
 
 
 def render(tpl: str, params: dict) -> str:
@@ -156,34 +157,107 @@ def _run_search(ctx: Ctx, query: str, lat: float = None, lng: float = None) -> R
     if lat is not None and lng is not None:
         places.sort(key=lambda p: _distance2(p, lat, lng))
 
-    ctx.session["search_places"] = places
+    # Jo business pehle reject ho chuke, unhe dobara mat dikhao.
+    rejected = set(ctx.session.get("rejected_ids") or [])
+    fresh = [p for p in places if p.get("id") not in rejected]
+    if not fresh:
+        return Result(ok=False)   # sab reject ho chuke -> BUSINESS_NOT_FOUND
+
+    ctx.session["search_places"] = fresh
     ctx.session["result_index"] = 0
-    ctx.session["found_place"] = places[0]
+    ctx.session["found_place"] = fresh[0]
+    ctx.session["biz_base_query"] = query   # refinement ('doosri city') ke liye
     ctx.session.pop("pending_biz_name", None)
     save_session(ctx.user_id, ctx.session)
-    return Result(params=_place_params(places[0]))
+    return Result(params=_place_params(fresh[0]))
+
+
+def _reject_current(ctx: Ctx) -> None:
+    """Abhi dikhaya business reject — dobara na aaye."""
+    cur = (ctx.session.get("found_place") or {}).get("id")
+    if cur:
+        rej = ctx.session.get("rejected_ids") or []
+        if cur not in rej:
+            rej.append(cur)
+            ctx.session["rejected_ids"] = rej
+            save_session(ctx.user_id, ctx.session)
+
+
+# Refinement ('Surat wali location ka' -> 'Surat') se filler shabd hatane ke liye
+_REFINE_FILLER = {
+    "wali", "wala", "wale", "waali", "vali", "location", "branch", "office",
+    "ka", "ki", "ke", "mein", "me", "ko", "wali", "city", "sh".strip(),
+    "the", "one", "in", "at", "please", "chahiye", "dikhao", "show",
+}
+
+
+def _clean_refine(text: str) -> str:
+    words = [w for w in text.split() if w.strip(".,").lower() not in _REFINE_FILLER]
+    return " ".join(words).strip()
+
+
+# Yeh business naam NAHI hain — "Yed", "yes", "ok" jaise shabd search mat karo,
+# warna "Yed Mansion" jaisa random result aa jaata hai.
+_JUNK_WORDS = {
+    "yes", "yeah", "yea", "yed", "yep", "yup", "ya", "haan", "han", "ha", "hn",
+    "no", "nahi", "nhi", "na", "ok", "okay", "okk", "k", "hi", "hii", "hello",
+    "hey", "start", "menu", "ji", "acha", "accha", "theek", "thik", "done",
+    "hmm", "hm", "kya", "what", "help", "madad",
+}
+
+
+# Sawaal/intent ke shabd — ASK_BUSINESS par yeh aaye to search nahi, AI samjhe.
+_QUESTION_WORDS = {
+    "kya", "kaise", "kyun", "kyu", "kitna", "kitne", "kaha", "kahan", "kab",
+    "what", "how", "why", "when", "where", "which", "who", "price", "plan",
+    "plans", "cost", "kimat", "paisa", "franchise", "website", "seo", "ads",
+    "kaunsa", "batao", "bata", "samajh", "explain", "matlab",
+}
+
+
+def _is_junk_query(q: str) -> bool:
+    """
+    Business search ke layak hai ya nahi. Junk/sawaal/intent -> True (AI samjhe).
+    'RO Care India' jaisa asli naam -> False (search karo).
+    """
+    q = q.strip()
+    low = q.lower()
+    words = low.split()
+
+    # 1. Single chhota shabd ("Yed", "abc", "k", "ok") — asli business naam nahi
+    if len(words) == 1 and len(q) < 4:
+        return True
+    # 2. Known junk/greeting/yes-no
+    if low in _JUNK_WORDS:
+        return True
+    # 3. Sawaal hai ("?" ya question/intent shabd) -> AI samjhe, search nahi
+    if "?" in q:
+        return True
+    if any(w.strip(".,?!") in _QUESTION_WORDS for w in words):
+        return True
+    return False
 
 
 def search_business(ctx: Ctx) -> Result:
     """
-    User ne business bheja (naam, ya naam+city, ya Maps link).
+    Business lookup — AI brain se gated. Search TABHI hota hai jab input sahi ho.
 
-    Pehle JO DIYA usi se search karo. Mil gaya -> dikhao. Kuch na mile -> TAB
-    city poocho (ASK_CITY).
+    Order (user ki spec):
+      1. Asli Maps/GBP URL   -> exact business (place_id/coords), koi guess nahi
+      2. AI classify         -> link maango / naam+city se search / maafi+retry /
+                                naam maango. Random keyword search NAHI, guess NAHI.
 
-    NOTE: pehle comma se decide karte the ki city di ya nahi — galat tha.
-    'RO Care India Gurgaon' mein city thi par comma nahi, to code city poochta
-    tha aur user chidh jaata tha. Ab search khud decide karta hai: agar Places
-    ko mil gaya to city thi hi (poori info thi); nahi mili tabhi poochte hain.
+    Isse "Google business profile link" jaise phrase par random business nahi
+    aata, aur "nahi yrr kuch bhi de diya" par maafi maang kar dobara poochte hain
+    (marketing nahi).
     """
     query = ctx.text.strip()
 
+    # 1. Asli URL -> exact (validated). URL na resolve ho to guess mat karo.
     maps_link = _MAPS_URL.search(query)
     if maps_link:
         q, lat, lng, place_id = _resolve_maps_url(maps_link.group(0).rstrip(".,!?)"))
         log.info("Maps link -> query=%r coords=(%s,%s) place_id=%s", q, lat, lng, place_id)
-
-        # 1. place_id mila -> BILKUL EXACT business (search hi nahi).
         if place_id:
             from app.services.google_places import get_place_details
             try:
@@ -195,23 +269,33 @@ def search_business(ctx: Ctx) -> Result:
                 ctx.session["search_places"] = [place]
                 ctx.session["result_index"] = 0
                 ctx.session["found_place"] = place
-                ctx.session.pop("pending_biz_name", None)
                 save_session(ctx.user_id, ctx.session)
                 return Result(params=_place_params(place))
-
-        # 2. Naam + coords -> us location par search, pin ke paas wala pehle.
         if q:
             return _run_search(ctx, q, lat, lng)
+        # Link tha par business identify nahi hua -> guess mat karo
         return Result(ok=False)
 
-    res = _run_search(ctx, query)
+    # 2. AI brain decide kare — search / link / retry / naam maango
+    from app.ai.fallback import business_intent
+    action, value = business_intent(ctx.user_id, query, ctx.session)
+    log.info("business_intent %r -> %s %r", query[:40], action, value[:40])
+
+    if action == "link":
+        return Result(next_override="ASK_LINK")
+    if action == "retry":
+        _reject_current(ctx)                    # galat business dobara na aaye
+        return Result(next_override="BUSINESS_RETRY")
+    if action == "goto":
+        return Result(next_override=value)      # PLANS / SUPPORT
+    if action != "search" or not value:
+        return Result(ok=False)                 # 'more'/unclear -> BUSINESS_NOT_FOUND
+
+    # AI ne saaf business naam (+city) diya -> ab search
+    res = _run_search(ctx, value)
     if res.ok:
         return res
-
-    # Kuch nahi mila -> ho sakta hai city missing thi. Ab city poocho.
-    ctx.session["pending_biz_name"] = query
-    save_session(ctx.user_id, ctx.session)
-    return Result(next_override="ASK_CITY")
+    return Result(ok=False)                     # nahi mila -> BUSINESS_NOT_FOUND
 
 
 def search_with_city(ctx: Ctx) -> Result:
@@ -224,11 +308,17 @@ def search_with_city(ctx: Ctx) -> Result:
 
 
 def next_result(ctx: Ctx) -> Result:
-    """'Nahi, doosra' — agla search result dikhao."""
+    """'Doosra dikhao' — abhi wala reject, agla non-rejected result dikhao."""
+    _reject_current(ctx)   # yeh wala nahi -> dobara kabhi na aaye
     places = ctx.session.get("search_places") or []
+    rejected = set(ctx.session.get("rejected_ids") or [])
+
     idx = ctx.session.get("result_index", 0) + 1
+    while idx < len(places) and places[idx].get("id") in rejected:
+        idx += 1
 
     if idx >= len(places):
+        # Sab dekh liye / reject ho gaye -> naam+city ya link maango
         return Result(ok=False, next_override="BUSINESS_NOT_FOUND")
 
     ctx.session["result_index"] = idx
@@ -336,6 +426,7 @@ def _poll_connection(user_id: str, phone: str, lang: str) -> None:
 
     from app.services.redis_service import get_session
 
+    fails = 0
     for attempt in range(100):  # ~5 min
         time.sleep(3)
         try:
@@ -347,8 +438,14 @@ def _poll_connection(user_id: str, phone: str, lang: str) -> None:
             if verify_and_start(user_id, phone, lang):
                 log.info("Poll: connected user=%s (attempt %d)", user_id, attempt + 1)
                 return
+            fails = 0  # ek safal check ke baad counter reset
         except Exception as e:
-            log.warning("Conn poll error user=%s: %s", user_id, e)
+            fails += 1
+            # Network lagatar down (getaddrinfo/timeout) — 100 baar spam mat karo.
+            if fails >= 12:
+                log.warning("Conn poll giving up user=%s — network %d baar fail (%s)",
+                            user_id, fails, type(e).__name__)
+                return
     log.info("Conn poll timeout user=%s — connect nahi hua", user_id)
 
 
@@ -367,7 +464,9 @@ def check_connection(ctx: Ctx) -> Result:
             return Result(ok=False)
         data = res.json()
     except Exception as e:
-        log.exception("gmb/status fail: %s", e)
+        # Sirf ek line — poll har 3s call karti hai, traceback log ko bhar deta hai.
+        # Network down (getaddrinfo fail) par yeh normal hai.
+        log.warning("gmb/status fail (network?): %s", type(e).__name__)
         return Result(ok=False)
 
     if not (data.get("status") == "success" or data.get("success")):

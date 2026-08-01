@@ -82,16 +82,23 @@ def _poll_loop(phone: str, action: str, user_id: str) -> None:
                 res = client.get(CHATBOT_ACTION_RESULT_API,
                                  params={"phone": phone, "action": action})
             if res.status_code != 200:
+                log.info("Result poll '%s' attempt %d: HTTP %s", action, attempt + 1, res.status_code)
                 continue
             data = res.json()
             if not data.get("success") or not data.get("result"):
+                # Backend ne abhi result nahi banaya — dikhana zaroori hai taaki
+                # pata chale bot poll kar raha hai par backend result nahi de raha.
+                log.info("Result poll '%s' attempt %d: not ready yet (success=%s, has_result=%s)",
+                         action, attempt + 1, data.get("success"), bool(data.get("result")))
                 continue
+            log.info("Result poll '%s' attempt %d: GOT RESULT -> delivering", action, attempt + 1)
             if _claim(user_id, action):
                 deliver(user_id, phone, action, data["result"])
             return
         except Exception as e:
             log.warning("Poll '%s' attempt %d fail: %s", action, attempt + 1, e)
-    log.error("Poll timeout: action=%s user=%s — user ko result nahi mila", action, user_id)
+    log.error("Result poll TIMEOUT: action=%s user=%s — backend ne %d×%ds mein result nahi diya",
+              action, user_id, _POLL_ATTEMPTS, _POLL_EVERY)
 
 
 def deliver_from_webhook(user_id: str, phone: str, action: str,

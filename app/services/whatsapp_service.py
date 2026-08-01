@@ -25,9 +25,11 @@ MAX_LIST_ROWS = 10
 MAX_ROW_TITLE = 24
 MAX_BODY = 1024   # WhatsApp interactive message body limit
 
-_TIMEOUT = 15
+# Platform (whatsapp.limbu.ai) kabhi-kabhi slow hota hai — 15s kaafi nahi tha,
+# send timeout ho jaata tha. 30s se slow-but-alive response bhi safal ho jaata hai.
+_TIMEOUT = 30
 _RETRIES = 3
-_BACKOFF = 2  # seconds; 2, 4, 8
+_BACKOFF = 2  # seconds; 2, 4
 
 
 def normalize_phone(phone: str) -> str:
@@ -214,7 +216,10 @@ def send_media(phone: str, media_type: str, url: str,
     if media_type == "document" and filename:
         media["filename"] = filename
 
-    return _post({"phone": normalize_phone(phone), "type": "media", "media": media})
+    log.info("Sending MEDIA (%s) to %s: %s", media_type, normalize_phone(phone)[-4:], url[:60])
+    ok = _post({"phone": normalize_phone(phone), "type": "media", "media": media})
+    log.info("MEDIA (%s) send %s", media_type, "OK" if ok else "FAILED")
+    return ok
 
 
 # ── Template (24h window ke baad) ─────────────────────────────────

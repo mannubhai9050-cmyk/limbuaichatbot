@@ -249,9 +249,18 @@ def _handle_text(ctx: Ctx) -> None:
         _goto(ctx, loader.start_screen())
         return
 
-    # Input screen wait kar rahi thi -> action chalao.
-    # Ya buttons screen jisme 'input_action' ho (jaise BUSINESS_NOT_FOUND par
-    # user dobara business type kare to AI nahi, search chale).
+    # 1. User ne button ka jawab TYPE kiya (click nahi) — jaise "Yes", "haan",
+    # "plans". Current screen ke button se match karke waise hi chalao jaise
+    # click kiya ho. Yahi hybrid: click ya type, dono barabar.
+    # Button match PEHLE — taaki CONFIRM par "yes" button jaaye, search nahi.
+    if current:
+        matched = loader.match_typed_button(current, ctx.text)
+        if matched and _handle_button(ctx, matched):
+            return
+
+    # 2. Input screen ka action, ya buttons screen jisme 'input_action' ho
+    # (jaise CONFIRM_BUSINESS/BUSINESS_NOT_FOUND par user city/naam type kare
+    # to AI nahi, dobara search chale).
     if current:
         s = loader.screen(current)
         action = s["action"] if s.get("type") == "input" else s.get("input_action")
@@ -259,6 +268,11 @@ def _handle_text(ctx: Ctx) -> None:
             nxt = s["next"] if s.get("type") == "input" else s.get("input_next")
             on_err = s.get("on_error") if s.get("type") == "input" else s.get("input_error")
             res = actions.run(action, ctx)
+            if res.to_ai:
+                # Action ne kaha "yeh samajh nahi aaya" (jaise ASK_BUSINESS par
+                # junk/sawaal) -> AI intent samjhe, mechanical re-prompt nahi.
+                _ai_respond(ctx, current)
+                return
             if res.stop:
                 return
             if res.next_override:
@@ -282,12 +296,25 @@ def _handle_text(ctx: Ctx) -> None:
             _goto(ctx, "BUSINESS_NOT_FOUND", res.params)
         return
 
-    # Warna AI jawab de, phir wahi buttons wapas
-    from app.ai.fallback import answer
+    # Kuch bhi flow se match nahi hua -> AI brain intent samjhe.
+    _ai_respond(ctx, current)
 
-    reply = answer(ctx.user_id, ctx.text, ctx.session)
-    wa.send_text(ctx.phone, reply)
-    save_message(ctx.user_id, "assistant", reply)
+
+def _ai_respond(ctx: Ctx, current: str) -> None:
+    """
+    AI intent samjhe: clear intent -> us screen par le jao; warna short jawab
+    do aur wahi screen ke buttons wapas dikhao.
+    """
+    from app.ai.fallback import respond
+
+    kind, val = respond(ctx.user_id, ctx.text, ctx.session)
+
+    if kind == "goto":
+        _goto(ctx, val)
+        return
+
+    wa.send_text(ctx.phone, val)
+    save_message(ctx.user_id, "assistant", val)
 
     if current:
         _send_screen(ctx, current,

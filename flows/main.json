@@ -116,22 +116,39 @@
       "on_error": "BUSINESS_NOT_FOUND"
     },
 
-    "ASK_CITY": {
+    "ASK_LINK": {
+      "_note": "User ne 'link' bola par asli URL nahi bheja. Ab paste maango. Jo paste kare wapas SEARCH_BUSINESS ko jaata hai.",
       "type": "input",
       "body": {
-        "hi": "Aapka business kis *city* mein hai?\n\n(Jaise: Delhi)",
-        "en": "Which *city* is your business in?\n\n(e.g., Delhi)"
+        "hi": "Apna *Google Business Profile / Google Maps link* yahan paste kar dijiye. 🔗\n\n(Jaise: https://maps.app.goo.gl/xxxx)",
+        "en": "Please paste your *Google Business Profile / Google Maps link* here. 🔗\n\n(e.g., https://maps.app.goo.gl/xxxx)"
       },
-      "action": "SEARCH_WITH_CITY",
+      "action": "SEARCH_BUSINESS",
+      "next": "CONFIRM_BUSINESS",
+      "on_error": "BUSINESS_NOT_FOUND"
+    },
+
+    "BUSINESS_RETRY": {
+      "_note": "User frustrated / galat match bola. Maafi + dobara maango (koi marketing NAHI). Jo bheje wapas SEARCH_BUSINESS ko.",
+      "type": "input",
+      "body": {
+        "hi": "Sorry, galat business match ho gaya. 🙏\n\nSahi business dhoondhne ke liye bhejein:\n\n1️⃣ Apna *Google Business Profile link*\nYA\n2️⃣ *Business Name + City*\n\nMain dobara dhoondhti hoon.",
+        "en": "Sorry, I matched the wrong business. 🙏\n\nTo find the right one, please send:\n\n1️⃣ Your *Google Business Profile link*\nOR\n2️⃣ *Business Name + City*\n\nI'll search again."
+      },
+      "action": "SEARCH_BUSINESS",
       "next": "CONFIRM_BUSINESS",
       "on_error": "BUSINESS_NOT_FOUND"
     },
 
     "CONFIRM_BUSINESS": {
+      "_note": "Typed text (jaise 'Surat wali' ya 'RO Care Surat') -> dobara search (input_action). AI ko nahi. Isliye doosri city bata sakte hain.",
       "type": "buttons",
+      "input_action": "SEARCH_BUSINESS",
+      "input_next": "CONFIRM_BUSINESS",
+      "input_error": "BUSINESS_NOT_FOUND",
       "body": {
-        "hi": "Yeh business mila:\n\n📍 *{{biz_name}}*\n⭐ {{biz_rating}}\n📍 {{biz_address}}\n\nKya yeh aapka business hai?",
-        "en": "I found this business:\n\n📍 *{{biz_name}}*\n⭐ {{biz_rating}}\n📍 {{biz_address}}\n\nIs this your business?"
+        "hi": "Yeh business mila:\n\n📍 *{{biz_name}}*\n⭐ {{biz_rating}}\n📍 {{biz_address}}\n\nKya yeh aapka business hai? (Doosri city chahiye to city ya naam+city likhein)",
+        "en": "I found this business:\n\n📍 *{{biz_name}}*\n⭐ {{biz_rating}}\n📍 {{biz_address}}\n\nIs this your business? (For another city, type the city or name + city)"
       },
       "buttons": [
         { "id": "BIZ_YES",  "title": { "hi": "✅ Haan, yahi hai", "en": "✅ Yes, this is it" }, "next": "ANALYSE_ASK" },
@@ -145,8 +162,8 @@
       "input_next": "CONFIRM_BUSINESS",
       "input_error": "BUSINESS_NOT_FOUND",
       "body": {
-        "hi": "Yeh business Google par nahi mila. 😔\n\nSahi *Business Name + City* ya apni Google Business Profile link dobara bhejein.",
-        "en": "Couldn't find this business on Google. 😔\n\nPlease send the correct *Business Name + City* or your Google Business Profile link."
+        "hi": "Aapke business ko pehchan nahi payi. 😔\n\nKripya bhejein:\n\n• *Google Business Profile link*\nYA\n• *Business Name + City*",
+        "en": "I couldn't identify your business from that input. 😔\n\nPlease send:\n\n• *Google Business Profile link*\nOR\n• *Business Name + City*"
       },
       "buttons": [
         { "id": "BIZ_RETRY", "title": { "hi": "🔁 Dobara bhejein", "en": "🔁 Send again" }, "next": "ASK_BUSINESS" },
