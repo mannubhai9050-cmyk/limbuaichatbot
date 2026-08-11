@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.core.config import (
-    LIMBU_API_BASE, LIMBU_CONNECT_URL, SUPPORT_PHONE, SUPPORT_EMAIL,
+    LIMBU_API_BASE, LIMBU_CONNECT_URL, SUPPORT_PHONE, SUPPORT_EMAIL, DEMO_BOOK_API,
 )
 from app.flow import loader
 from app.services import whatsapp_service as wa
@@ -737,25 +737,50 @@ def switch_location(ctx: Ctx) -> Result:
 
 
 # ── DEMO BOOKING ──────────────────────────────────────────────────
+# Slot ka hour (IST) — aaj ke nikal chuke slots nahi dikhते.
+_SLOT_HOUR = {"T_MORNING": 11, "T_AFTERNOON": 15, "T_EVENING": 18}
+_SLOT_ORDER = ["T_MORNING", "T_AFTERNOON", "T_EVENING"]
+
+
+def _now_ist():
+    from datetime import datetime
+    import pytz
+    from app.core.config import TIMEZONE
+    return datetime.now(pytz.timezone(TIMEZONE))
+
+
+def _demo_date(offset: int) -> tuple:
+    """(YYYY-MM-DD, label) — IST mein."""
+    from datetime import timedelta
+    d = _now_ist() + timedelta(days=offset)
+    return d.strftime("%Y-%m-%d"), d.strftime("%A, %d %b")
+
+
+def _valid_slots(offset: int) -> list:
+    """Us din ke woh time slots jo abhi bhi future mein hain."""
+    if offset != 0:
+        return list(_SLOT_ORDER)             # kal/parso — saare valid
+    hour = _now_ist().hour
+    return [s for s in _SLOT_ORDER if _SLOT_HOUR[s] > hour]   # aaj — sirf aage wale
+
+
+def _valid_days() -> list:
+    """Kaunse din offer karein. Aaj ka koi slot na bacha to Aaj hata do."""
+    days = []
+    if _valid_slots(0):
+        days.append("D_TODAY")
+    days += ["D_TOMORROW", "D_DAYAFTER"]
+    return days
+
+
 def demo_save_name(ctx: Ctx) -> Result:
     name = ctx.text.strip()
     if len(name) < 2:
         return Result(ok=False)
     ctx.session["demo_name"] = name
+    ctx.session["demo_days"] = _valid_days()     # DEMO_ASK_DAY filter ke liye
     save_session(ctx.user_id, ctx.session)
     return Result(params={"demo_name": name})
-
-
-def _demo_date(offset: int) -> tuple:
-    """(YYYY-MM-DD, label) — IST mein."""
-    from datetime import datetime, timedelta
-
-    import pytz
-
-    from app.core.config import TIMEZONE
-
-    d = datetime.now(pytz.timezone(TIMEZONE)) + timedelta(days=offset)
-    return d.strftime("%Y-%m-%d"), d.strftime("%A, %d %b")
 
 
 def demo_save_date(ctx: Ctx) -> Result:
@@ -764,18 +789,30 @@ def demo_save_date(ctx: Ctx) -> Result:
     if offset is None:
         return Result(ok=False)
 
+    slots = _valid_slots(offset)
+    if not slots:                                # aaj ke saare slot nikal gaye
+        offset += 1                              # -> kal
+        slots = _valid_slots(offset)
+
     date_str, label = _demo_date(offset)
     ctx.session["demo_date"] = date_str
     ctx.session["demo_date_label"] = label
+    ctx.session["demo_slots"] = slots            # DEMO_ASK_TIME filter ke liye
     save_session(ctx.user_id, ctx.session)
     return Result(params={"demo_date_label": label, "demo_name": ctx.session.get("demo_name", "")})
 
 
+def _demo_business(ctx: Ctx) -> str:
+    """Booking ke liye business naam — jo bhi context mein ho."""
+    return (ctx.session.get("active_business_name")
+            or (ctx.session.get("found_place") or {}).get("displayName", {}).get("text", "")
+            or "")
+
+
 def book_demo(ctx: Ctx) -> Result:
     """
-    NOTE: purana code date validate hi nahi karta tha — date_extractor parse
-    fail hone par `return True` ('future hai') kar deta tha, aur booking API
-    fail hone par bhi user ko 'booked' bol deta tha. Ab dono sach hain.
+    Demo book — POST /api/bookDemo. Phone WHATSAPP wala (jisse baat ho rahi),
+    time future ka (past slot pehle hi hata diye). API fail -> DEMO_FAILED (sach).
     """
     screen = loader.screen("DEMO_CONFIRM")
     time_str = (screen.get("time_map") or {}).get(ctx.button_id, "")
@@ -788,10 +825,19 @@ def book_demo(ctx: Ctx) -> Result:
     if not (name and date_str):
         return Result(ok=False)
 
-    payload = {"name": name, "phone": ctx.phone, "date": date_str,
-               "time": time_str, "source": "chatbot"}
+    # WhatsApp number — 10 digit (91 hata kar), jaisa API example mein
+    phone = ctx.phone[2:] if ctx.phone.startswith("91") and len(ctx.phone) > 10 else ctx.phone
+
+    payload = {
+        "name": name,
+        "phone": phone,
+        "business": _demo_business(ctx),
+        "seminarTime": time_str,
+        "selectedDate": date_str,
+        "status": "Not Attended",
+    }
     try:
-        res = httpx.post(f"{LIMBU_API_BASE}/demo/book", json=payload, timeout=_HTTP_TIMEOUT)
+        res = httpx.post(DEMO_BOOK_API, json=payload, timeout=_HTTP_TIMEOUT)
         ok = res.status_code in (200, 201)
         if ok:
             try:

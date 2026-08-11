@@ -28,21 +28,21 @@
       "GEN_QR":        "magic_qr",
       "VIEW_INSIGHTS": "insights",
       "GEN_WEBSITE":   "website",
-      "AI_REVIEWS":    "review_reply"
+      "AI_REVIEWS":    "auto_review_reply"
     },
     "chain": {
       "health_score": "HEALTH_DONE",
       "magic_qr":     "QR_DONE",
       "insights":     "INSIGHTS_DONE",
       "website":      "WEBSITE_DONE",
-      "review_reply": "REVIEW_DONE"
+      "auto_review_reply": "REVIEW_DONE"
     },
     "labels": {
       "health_score": { "hi": "Full Health Report", "en": "Full Health Report" },
       "magic_qr":     { "hi": "Magic QR Code",       "en": "Magic QR Code" },
       "insights":     { "hi": "Google Insights",     "en": "Google Insights" },
       "website":      { "hi": "Free Website",        "en": "Free Website" },
-      "review_reply": { "hi": "AI Review Reply",     "en": "AI Review Reply" }
+      "auto_review_reply": { "hi": "AI Review Reply",     "en": "AI Review Reply" }
     }
   },
 
@@ -80,6 +80,28 @@
     "error_generic": {
       "hi": "Maafi chahti hoon, kuch technical problem aa gayi. 😔\nDobara try karein ya call karein: 📞 {{support_phone}}",
       "en": "Sorry, something went wrong technically. 😔\nPlease try again or call us: 📞 {{support_phone}}"
+    },
+
+    "_reengage_note": "2h/5-6h baad topic-aware follow-up. Jis screen par baat ruki, uske hisaab se.",
+    "reengage_plans": {
+      "hi": "Namaste! 😊 Aap plans dekh rahe the — koi sawaal ho to poochhein, main help karungi. Ya main ek *FREE demo* book kar doon?",
+      "en": "Hi! 😊 You were looking at our plans — any questions? I'm happy to help. Or shall I book you a *FREE demo*?"
+    },
+    "reengage_connect": {
+      "hi": "Namaste! 😊 Aapki Google Business connect karni thi taaki *FREE health report* mile. Ready hon to bata dijiye, main link dobara bhej doon?",
+      "en": "Hi! 😊 You were about to connect your Google Business for a *FREE health report*. Ready? I can resend the link."
+    },
+    "reengage_business": {
+      "hi": "Namaste! 😊 Aap apna business dhoondh rahe the. Business *Name + City* ya Google link bhej dijiye — main turant dhoondh dungi.",
+      "en": "Hi! 😊 You were finding your business. Send your business *Name + City* or Google link — I'll find it right away."
+    },
+    "reengage_features": {
+      "hi": "Namaste! 😊 Aapki kuch *FREE features* abhi baaki hain (Magic QR, Website, Insights). Aage badhna chahenge?",
+      "en": "Hi! 😊 You still have some *FREE features* left (Magic QR, Website, Insights). Want to continue?"
+    },
+    "reengage_demo": {
+      "hi": "Namaste! 😊 Aapka *FREE demo* book karna tha. Bas naam aur time chahiye — abhi book kar doon?",
+      "en": "Hi! 😊 We were booking your *FREE demo*. Just need your name and time — shall I book it now?"
     }
   },
 
@@ -298,14 +320,16 @@
     },
 
     "REVIEW_DONE": {
+      "_note": "Saari FREE features use ho gayi -> ab plan suggest + demo offer.",
       "type": "buttons",
       "body": {
-        "hi": "✅ *AI Review Reply System* ab aapke Google Reviews ke professional jawab apne aap de sakta hai.\n\nTez jawab, behtar customer engagement.\n\nAage kya karein?",
-        "en": "✅ The *AI Review Reply System* can now auto-generate professional replies to your Google Reviews.\n\nFaster replies, better engagement.\n\nWhat next?"
+        "hi": "🎉 Shabaash! Aapne saari *FREE features* try kar li:\n✅ Health Report ✅ Magic QR ✅ Insights ✅ Website ✅ Review Reply\n\nAb inhe *automatic* chalane aur poora growth paane ke liye ek plan lein — ya main aapke liye ek *FREE live demo* book kar doon?",
+        "en": "🎉 Awesome! You've tried all the *FREE features*:\n✅ Health Report ✅ Magic QR ✅ Insights ✅ Website ✅ Review Reply\n\nTo run these *automatically* and get full growth, pick a plan — or shall I book you a *FREE live demo*?"
       },
       "buttons": [
-        { "id": "VIEW_PLANS",  "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" },     "next": "PLANS" },
-        { "id": "TALK_HUMAN",  "title": { "hi": "📞 Expert se baat", "en": "📞 Talk to Expert" }, "next": "SUPPORT" }
+        { "id": "VIEW_PLANS",  "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" },  "next": "PLANS" },
+        { "id": "BOOK_DEMO",   "title": { "hi": "📅 Demo book karein", "en": "📅 Book a demo" }, "next": "DEMO_ASK_NAME" },
+        { "id": "TALK_HUMAN",  "title": { "hi": "📞 Baat karein",    "en": "📞 Talk to us" },   "next": "SUPPORT" }
       ]
     },
 
@@ -328,8 +352,82 @@
         "en": "No problem! 😊\n\nWe're here whenever you're ready. Meanwhile:"
       },
       "buttons": [
-        { "id": "VIEW_PLANS", "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" },     "next": "PLANS" },
-        { "id": "TALK_HUMAN", "title": { "hi": "📞 Expert se baat", "en": "📞 Talk to Expert" }, "next": "SUPPORT" }
+        { "id": "VIEW_PLANS", "title": { "hi": "💰 Plans dekhein",   "en": "💰 View Plans" },  "next": "PLANS" },
+        { "id": "BOOK_DEMO",  "title": { "hi": "📅 Demo book karein", "en": "📅 Book a demo" }, "next": "DEMO_ASK_NAME" },
+        { "id": "TALK_HUMAN", "title": { "hi": "📞 Baat karein",     "en": "📞 Talk to us" },  "next": "SUPPORT" }
+      ]
+    },
+
+    "DEMO_ASK_NAME": {
+      "type": "input",
+      "body": {
+        "hi": "Bahut badhiya! Ek FREE live demo book karte hain. 🎯\n\nApna *naam* likh dijiye.",
+        "en": "Great! Let's book a FREE live demo. 🎯\n\nPlease type your *name*."
+      },
+      "action": "DEMO_SAVE_NAME",
+      "next": "DEMO_ASK_DAY",
+      "on_error": "DEMO_ASK_NAME"
+    },
+
+    "DEMO_ASK_DAY": {
+      "type": "buttons",
+      "filter_buttons": "demo_days",
+      "body": {
+        "hi": "Shukriya {{demo_name}}! 😊\n\nKis din demo chahiye?",
+        "en": "Thanks {{demo_name}}! 😊\n\nWhich day works for you?"
+      },
+      "buttons": [
+        { "id": "D_TODAY",    "title": { "hi": "Aaj",   "en": "Today" },     "next": "DEMO_ASK_TIME" },
+        { "id": "D_TOMORROW", "title": { "hi": "Kal",   "en": "Tomorrow" },  "next": "DEMO_ASK_TIME" },
+        { "id": "D_DAYAFTER", "title": { "hi": "Parso", "en": "Day after" }, "next": "DEMO_ASK_TIME" }
+      ]
+    },
+
+    "DEMO_ASK_TIME": {
+      "type": "buttons",
+      "action": "DEMO_SAVE_DATE",
+      "date_map": { "D_TODAY": 0, "D_TOMORROW": 1, "D_DAYAFTER": 2 },
+      "filter_buttons": "demo_slots",
+      "body": {
+        "hi": "{{demo_date_label}} ko kis time?",
+        "en": "What time on {{demo_date_label}}?"
+      },
+      "buttons": [
+        { "id": "T_MORNING",   "title": { "hi": "🕚 11:00 AM", "en": "🕚 11:00 AM" }, "next": "DEMO_CONFIRM" },
+        { "id": "T_AFTERNOON", "title": { "hi": "🕒 3:00 PM",  "en": "🕒 3:00 PM" },  "next": "DEMO_CONFIRM" },
+        { "id": "T_EVENING",   "title": { "hi": "🕕 6:00 PM",  "en": "🕕 6:00 PM" },  "next": "DEMO_CONFIRM" }
+      ]
+    },
+
+    "DEMO_CONFIRM": {
+      "type": "action",
+      "action": "BOOK_DEMO",
+      "time_map": { "T_MORNING": "11:00 AM", "T_AFTERNOON": "3:00 PM", "T_EVENING": "6:00 PM" },
+      "next": "DEMO_DONE",
+      "on_error": "DEMO_FAILED"
+    },
+
+    "DEMO_DONE": {
+      "type": "buttons",
+      "body": {
+        "hi": "Demo confirm ho gaya! ✅\n\n📅 {{demo_date_label}}\n🕐 {{demo_time}}\n\nHamari team us waqt aapko call karegi. 📞 {{support_phone}}",
+        "en": "Demo confirmed! ✅\n\n📅 {{demo_date_label}}\n🕐 {{demo_time}}\n\nOur team will call you then. 📞 {{support_phone}}"
+      },
+      "buttons": [
+        { "id": "VIEW_PLANS", "title": { "hi": "💰 Plans dekhein", "en": "💰 View Plans" }, "next": "PLANS" }
+      ]
+    },
+
+    "DEMO_FAILED": {
+      "_note": "API fail hone par 'booked' NAHI bolte — sach: call karein.",
+      "type": "buttons",
+      "body": {
+        "hi": "Maafi chahti hoon, demo book nahi ho paaya. 😔\n\nKripya seedha call karein, team turant slot de degi:\n📞 {{support_phone}}",
+        "en": "Sorry, the demo didn't get booked. 😔\n\nPlease call us and our team will fix a slot right away:\n📞 {{support_phone}}"
+      },
+      "buttons": [
+        { "id": "BOOK_DEMO", "title": { "hi": "🔁 Dobara try", "en": "🔁 Try again" }, "next": "DEMO_ASK_NAME" },
+        { "id": "TALK_HUMAN", "title": { "hi": "📞 Baat karein", "en": "📞 Talk to us" }, "next": "SUPPORT" }
       ]
     },
 

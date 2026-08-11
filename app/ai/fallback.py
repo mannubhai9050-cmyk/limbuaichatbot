@@ -28,6 +28,7 @@ _GOTO_SCREEN = {
     "PLANS": "PLANS",
     "BUSINESS": "ASK_BUSINESS",
     "SUPPORT": "SUPPORT",
+    "DEMO": "DEMO_ASK_NAME",
     "RESTART": "WELCOME",
 }
 
@@ -75,6 +76,7 @@ ROUTE (reply with ONLY the tag, nothing else) when the user clearly wants to:
 • See the monthly SUBSCRIPTION plans (Basic/Professional/Premium) or buy them -> [GOTO:PLANS]
 • Add / connect / analyze THEIR OWN business, get their health report, GMB -> [GOTO:BUSINESS]
 • Talk to a human / agent / support / call back -> [GOTO:SUPPORT]
+• Book a demo / schedule a call / want a demo -> [GOTO:DEMO]
 • Restart / go to main menu / start fresh -> [GOTO:RESTART]
 
 Otherwise, ANSWER as an expert using ONLY the knowledge below:
@@ -171,6 +173,7 @@ Use the conversation so far (it may show a business we already displayed). Outpu
                                (e.g. "nahi yrr kuch bhi de diya", "kya de rahe ho", "ye nahi hai", "galat business")
 [MORE]                      -> too vague to identify a business (generic keyword, greeting, unclear)
 [PLANS]                     -> they ask about pricing / plans / cost
+[DEMO]                      -> they want to book a demo / schedule a call / "book demo for me"
 [SUPPORT]                   -> they want a human / support / to talk
 
 HARD RULES:
@@ -220,6 +223,8 @@ def business_intent(user_id: str, text: str, session: dict) -> tuple:
         return "retry", ""
     if up.startswith("[PLANS]"):
         return "goto", "PLANS"
+    if up.startswith("[DEMO]"):
+        return "goto", "DEMO_ASK_NAME"
     if up.startswith("[SUPPORT]"):
         return "goto", "SUPPORT"
     return "more", ""

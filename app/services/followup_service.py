@@ -37,6 +37,62 @@ RULES = {
     "PLAN_PENDING": (60 * 60, "PLANS"),
 }
 
+# Re-engagement: user chup ho gaya to 2h aur ~5.5h baad, JIS TOPIC par baat ruki
+# thi uska nudge. Har user message par re-arm hota hai (cancel + reschedule).
+REENGAGE_DELAYS = {"REENGAGE_2H": 2 * 60 * 60, "REENGAGE_6H": int(5.5 * 60 * 60)}
+
+# flow_screen -> reengage text key. Jo screen yahan nahi, uspar nudge nahi
+# (jaise GOODBYE, DEMO_DONE, SUPPORT — inpar re-engage nahi).
+_TOPIC = {
+    "PLANS": "reengage_plans", "PLAN_DETAIL": "reengage_plans", "REVIEW_DONE": "reengage_plans",
+    "CONNECT_ASK": "reengage_connect", "CONNECT_PENDING": "reengage_connect", "CONNECT_NOT_YET": "reengage_connect",
+    "ASK_BUSINESS": "reengage_business", "CONFIRM_BUSINESS": "reengage_business",
+    "BUSINESS_NOT_FOUND": "reengage_business", "ASK_LINK": "reengage_business", "BUSINESS_RETRY": "reengage_business",
+    "HEALTH_DONE": "reengage_features", "QR_DONE": "reengage_features",
+    "INSIGHTS_DONE": "reengage_features", "WEBSITE_DONE": "reengage_features", "FEATURES_MENU": "reengage_features",
+    "DEMO_ASK_NAME": "reengage_demo", "DEMO_ASK_DAY": "reengage_demo", "DEMO_ASK_TIME": "reengage_demo",
+    "ANALYSE_ASK": "reengage_connect", "LATER_MENU": "reengage_plans",
+}
+
+
+def schedule_reengage(user_id: str, phone: str) -> None:
+    """2h aur ~5.5h baad topic nudge queue karo (har message par re-arm)."""
+    try:
+        now = time.time()
+        for kind, delay in REENGAGE_DELAYS.items():
+            payload = json.dumps({"user_id": user_id, "phone": phone, "kind": kind},
+                                 sort_keys=True)
+            _r().zadd(QUEUE, {payload: now + delay})
+    except Exception as e:
+        log.warning("Reengage schedule fail: %s", e)
+
+
+def _send_reengage(user_id: str, phone: str) -> None:
+    """Jis screen par baat ruki, uska topic-aware nudge bhejo."""
+    from app.flow import actions, loader
+    from app.services.redis_service import get_session
+    from app.services.whatsapp_service import send_text
+
+    session = get_session(user_id)
+    if not session:
+        return
+    screen = session.get("flow_screen", "")
+    key = _TOPIC.get(screen)
+    if not key:
+        return   # is topic par re-engage nahi
+    # Connect ho chuka to connect nudge nahi — features wala do
+    if key == "reengage_connect" and session.get("connect_verified"):
+        key = "reengage_features"
+
+    lang = session.get("lang", "en")
+    try:
+        msg = actions.render(loader.text(key)[lang], actions._base_params())
+    except Exception as e:
+        log.warning("reengage text fail: %s", e)
+        return
+    send_text(phone, msg)
+    log.info("Reengage sent: %s screen=%s key=%s", user_id, screen, key)
+
 
 def _r():
     from app.services.redis_service import r
@@ -82,6 +138,11 @@ def _send(item: dict) -> None:
     from app.services.redis_service import get_session, save_session
 
     user_id, phone, kind = item["user_id"], item["phone"], item["kind"]
+
+    # Re-engagement (2h / 5-6h) — topic-aware nudge
+    if kind in REENGAGE_DELAYS:
+        _send_reengage(user_id, phone)
+        return
 
     # Purani/stale queue entry (flow badalne ke baad) — chup-chaap chhod do.
     if kind not in RULES:

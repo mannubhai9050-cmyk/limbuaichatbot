@@ -26,6 +26,9 @@ LIMBU_API_BASE = "https://limbu.ai/api"
 LIMBU_ADMIN_EMAIL = "info@limbu.ai"
 LIMBU_CONNECT_URL = "https://limbu.ai/connect-google-business"
 
+# Demo booking endpoint (POST /api/bookDemo).
+DEMO_BOOK_API = os.getenv("DEMO_BOOK_API", "https://limbu.ai/api/bookDemo")
+
 # Plans API — fetch from Limbu backend
 PLANS_API_URL = os.getenv("PLANS_API_URL", "https://limbu.ai/api/plans")
 

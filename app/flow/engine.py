@@ -91,7 +91,15 @@ def _send_screen(ctx: Ctx, name: str, params: dict) -> None:
     stype = s.get("type")
 
     if stype == "buttons":
-        btns = [{"id": b["id"], "title": _i18n(b["title"], lang)} for b in s["buttons"]]
+        buttons = s["buttons"]
+        # filter_buttons: sirf woh buttons jinke id session ki list mein hain
+        # (jaise demo ke past time slots hata dena). Key khaali/missing -> sab.
+        fkey = s.get("filter_buttons")
+        if fkey:
+            allowed = ctx.session.get(fkey)
+            if allowed:
+                buttons = [b for b in buttons if b["id"] in allowed] or buttons
+        btns = [{"id": b["id"], "title": _i18n(b["title"], lang)} for b in buttons]
         wa.send_buttons(ctx.phone, body, btns)
 
     elif stype == "list" and s.get("dynamic_rows"):
@@ -313,13 +321,20 @@ def _ai_respond(ctx: Ctx, current: str) -> None:
         _goto(ctx, val)
         return
 
-    wa.send_text(ctx.phone, val)
     save_message(ctx.user_id, "assistant", val)
 
-    if current:
+    # AI jawab + wahi buttons EK message mein — do alag message nahi (jisse
+    # conversation tuta hua lagta tha). Sirf buttons screen par; warna text.
+    s = loader.screen(current) if current else None
+    if s and s.get("type") == "buttons" and s.get("buttons"):
+        btns = [{"id": b["id"], "title": _i18n(b["title"], ctx.lang)} for b in s["buttons"]]
+        wa.send_buttons(ctx.phone, val, btns)
+    elif current:
+        wa.send_text(ctx.phone, val)
         _send_screen(ctx, current,
                      {**actions._base_params(), **(ctx.session.get("flow_params") or {})})
     else:
+        wa.send_text(ctx.phone, val)
         _goto(ctx, loader.start_screen())
 
 
@@ -351,6 +366,7 @@ def handle(user_id: str, phone: str, text: str = "", button_payload: str = "") -
     # User active hai — pending nudges hatao, warna use "aapne jawab nahi
     # diya" wala message reply ke turant baad mil jaayega.
     from app.services.followup_service import cancel as cancel_followups
+    from app.services.followup_service import schedule_reengage
     cancel_followups(user_id)
 
     try:
@@ -378,3 +394,10 @@ def handle(user_id: str, phone: str, text: str = "", button_payload: str = "") -
             wa.send_text(phone, msg)
         except Exception:
             log.exception("Error message bhi nahi bhej paye")
+    finally:
+        # Har message ke baad 2h/5-6h re-engage re-arm (upar cancel ne purane
+        # hataye). User agar chup ho gaya to topic-aware nudge jaayega.
+        try:
+            schedule_reengage(user_id, phone)
+        except Exception:
+            pass
